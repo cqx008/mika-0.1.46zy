@@ -1,0 +1,39 @@
+# build
+build/
+gradle/build/
+app/build/
+core/build/
+
+# Gradle
+.gradle/
+local.properties
+
+# Android Studio / IntelliJ
+.idea/
+*.iml
+.kotlin/
+
+# APK artifacts
+*.apk
+*.aab
+
+# Local keystore / signing material — never commit
+*.jks
+*.keystore
+
+# Local agent worktrees and install artifacts
+.claude/
+.omc/
+dist/
+
+# Computer CLI build and test artifacts
+__pycache__/
+*.py[cod]
+*.egg-info/
+
+# OS / editor
+.DS_Store
+*.local.txt
+
+# Local-only AI assistant rules
+CLAUDE.md
