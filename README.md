@@ -8,6 +8,18 @@
 
 It works on a hidden background screen, so you can keep using your phone.
 
+<div align="center">
+
+> **📌 社区版 fork（cqx008/mika-0.1.46zy）** — 本项目继承自上游 [wangzan101/Mika](https://github.com/wangzan101/Mika)（Apache-2.0）。
+> 本版（**0.1.46zy**）额外包含：**购物/下单「结算放宽」**（自动点到付款页、只在最终付款停下确认、不替用户点优惠券/红包）、**AI 打电话自动总结**、**工单/更新/账号后端可配置**（`MIKA_BACKEND_BASE`）。
+>
+> **本版 APK 下载（社区版 0.1.46zy）：**
+> [Universal](https://123.movejianshen.icu/omnibot-assets/mika-0.1.46zy-universal-release.apk) · [arm64-v8a](https://123.movejianshen.icu/omnibot-assets/mika-0.1.46zy-arm64-v8a-release.apk)
+>
+> 上游功能与演示见下方（README 其余部分继承自上游，star 请给上游或本仓库均可）。
+
+</div>
+
 <a href="https://github.com/wangzan101/Mika"><img src="docs/media/star-banner-v2.png" alt="Like Mika? Give it a star — click Star in the top-right corner" width="620" /></a>
 
 <br/>
