@@ -60,6 +60,33 @@ class ChatViewModelTest {
 
     @get:Rule val tmp = TemporaryFolder()
 
+    @Test fun readAloudReportsFailureAndAllowsRetry() = runTest {
+        val errors = mutableListOf<String>()
+        var attempts = 0
+        val app = com.wangzan101.mika.MikaApp()
+        val vm = ChatViewModel(backgroundScope, state, stage, actions, ConversationStore(tmp.newFolder()),
+            speakText = { text -> app.speak(text) { if (++attempts == 1) throw java.io.IOException("offline") } },
+            voiceFailed = errors::add)
+        vm.speak("你好")
+        runCurrent()
+        assertEquals(1, errors.size)
+        assertTrue(errors.single().contains("offline"))
+        vm.speak("再试一次")
+        runCurrent()
+        assertEquals(2, attempts)
+        assertEquals(1, errors.size)
+    }
+
+    @Test fun readAloudCancellationDoesNotBecomeAPlaybackError() = runTest {
+        val errors = mutableListOf<String>()
+        val vm = ChatViewModel(backgroundScope, state, stage, actions, ConversationStore(tmp.newFolder()),
+            speakText = { throw kotlinx.coroutines.CancellationException("stopped") },
+            voiceFailed = errors::add)
+        vm.speak("你好")
+        runCurrent()
+        assertTrue(errors.isEmpty())
+    }
+
     private val state = MutableStateFlow<TaskState>(TaskState.Idle)
     private val stage = MutableStateFlow(Takeover.Stage.None)
     private val calls = mutableListOf<String>()
@@ -71,7 +98,7 @@ class ChatViewModelTest {
     private var queueSaveSucceeds = true
     private val queueStartIfIdle = mutableListOf<Boolean>()
     private val actions = object : TaskActions {
-        override fun start(goal: String, conversationId: String, sceneIntent: String?) { calls += "start:$goal" }
+        override fun start(goal: String, conversationId: String) { calls += "start:$goal" }
         override fun steer(conversationId: String, messageId: String, text: String) { calls += "steer:$text"; steerIds += messageId }
         override fun enqueueFollowUp(conversationId: String, messageId: String, text: String, startIfIdle: Boolean): Boolean {
             calls += "queue:$text"; steerIds += messageId; queueStartIfIdle += startIfIdle
@@ -148,13 +175,34 @@ class ChatViewModelTest {
         assertNull(notice.recordedRun)
         assertEquals("我从通知里挑出 1 条", (notice.status as ExchangeStatus.Done).answer)
         assertEquals("run-1", reply.recordedRun)
-        // 页面上的行数和画出来的对得上:提醒那一轮只有回答那一行,普通的一轮是原话、「查看过程」、回答三行
-        assertEquals(1 + 3, chatItemCount(vm.ui.value.exchanges, kept = null, phoneSetupNeeded = false, hasBlocked = false))
+        // 页面上的行数和画出来的对得上:提醒那一轮只有回答那一行,普通的一轮是原话、回答两行(查看过程收进回答卡的操作区了)
+        assertEquals(1 + 2, chatItemCount(vm.ui.value.exchanges, kept = null, phoneSetupRow = null, hasBlocked = false))
         // 对话开着的时候又写进一轮提醒:接在后面,前面的不动、不合并
         store.append("talk", Turn("", "我从通知里挑出 2 条", "succeeded", runId = "notice:n2"))
         runCurrent()
         assertEquals(listOf("notice:n1", "run-1", "notice:n2"), vm.ui.value.exchanges.map { it.runId })
         assertEquals(listOf("我从通知里挑出 1 条", "已回复", "我从通知里挑出 2 条"), vm.ui.value.exchanges.map { (it.status as ExchangeStatus.Done).answer })
+    }
+
+    @Test fun workflowConversationCanOpenWhileRunningAndPreservesDraft() = runTest {
+        val active = MutableStateFlow<List<String>>(emptyList())
+        val vm = ChatViewModel(backgroundScope, state, stage, actions, ConversationStore(tmp.newFolder()),
+            activeConversations = active, parallelFlag = { false }, runGoal = { "workflow step" })
+        runCurrent()
+        vm.openConversation("original")
+        vm.input("draft to keep")
+        vm.quote(QuoteMessage.From.Mika, "quoted result")
+        active.value = listOf("step")
+        emit(TaskState.Running(1, "working"))
+        vm.openWorkflowConversation("step")
+        assertEquals("step", vm.ui.value.conversationId)
+        assertTrue(calls.contains("show:step"))
+        assertFalse(calls.any { it.startsWith("start:") })
+        active.value = emptyList()
+        emit(TaskState.Idle)
+        vm.openWorkflowConversation("original")
+        assertEquals("draft to keep", vm.ui.value.input)
+        assertEquals("quoted result", vm.ui.value.quote?.text)
     }
 
     @Test fun draftsStayWithTheirConversationInSerialAndParallelModes() = runTest {
@@ -328,7 +376,7 @@ class ChatViewModelTest {
             assertEquals("a", id)
             gate.await()
             if (path.contains("bad")) throw IllegalStateException()
-            com.wangzan101.mika.core.cap.devicefiles.DeviceFileImport("/workspace/inbox/good.pdf", 12)
+            com.wangzan101.mika.core.workspace.DeviceFileImport("/workspace/inbox/good.pdf", 12)
         }
         runCurrent()
         assertTrue(vm.ui.value.importing)
@@ -352,7 +400,7 @@ class ChatViewModelTest {
         val copied = mutableListOf<String>()
         vm.importDeviceAttachments("a", listOf("/one", "/two")) { path, _ ->
             copied += path
-            com.wangzan101.mika.core.cap.devicefiles.DeviceFileImport("/workspace/inbox/one", 1)
+            com.wangzan101.mika.core.workspace.DeviceFileImport("/workspace/inbox/one", 1)
         }
         runCurrent()
         assertEquals(listOf("/one"), copied)
@@ -369,7 +417,7 @@ class ChatViewModelTest {
         vm.openConversation("a")
         vm.importDeviceAttachments("a", listOf("/file")) { _, _ ->
             gate.await()
-            com.wangzan101.mika.core.cap.devicefiles.DeviceFileImport("/workspace/inbox/file", 1)
+            com.wangzan101.mika.core.workspace.DeviceFileImport("/workspace/inbox/file", 1)
         }
         runCurrent()
         vm.deleteConversation("a")
@@ -770,6 +818,25 @@ class ChatViewModelTest {
         assertEquals("takeOver", calls.last())
     }
 
+    /** 经 MCP 调外部连接器:在跑时说在调哪个;做完单独一行标连接器配置的名字,失败也看得出是哪个连接器。 */
+    @Test fun mcpConnectorNamedOnLiveLineAndSteps() = runTest {
+        val vm = vm()
+        vm.send("查一下团队笔记", ok)
+        emit(TaskState.Running(1, "我去笔记里找找", mcpConnector = "Team notes"))
+        assertEquals("正在调用 Team notes MCP…", liveLine(vm.ui.value.exchanges.single()))
+
+        acts.value = acts.value + RunEvent.Activity(0, 1, "act", "mcp_demo__search", null, "completed", mcpConnector = "Team notes")
+        runCurrent()
+        acts.value = acts.value + RunEvent.Activity(0, 2, "act", "mcp_demo__search", null, "some_error", failed = true, mcpConnector = "Team notes")
+        runCurrent()
+        emit(TaskState.Succeeded("找到了"))
+        val steps = vm.ui.value.exchanges.single().steps
+        assertEquals(StepRow(1, "已调用 Team notes MCP", "", StepState.Ok), steps[0])
+        assertEquals(StepRow(2, "已调用 Team notes MCP", tr(R.string.step_failed), StepState.Ok), steps[1])
+        // 错误码不给人看
+        assertFalse(steps.joinToString().contains("some_error") || steps.joinToString().contains("mcp_demo"))
+    }
+
     @Test fun paymentTakeoverCarriesDetailsAndCanBeSkipped() = runTest {
         val vm = vm()
         vm.send("买一杯咖啡", ok)
@@ -843,7 +910,7 @@ class ChatViewModelTest {
         assertNull((vm.ui.value.exchanges.last().status as ExchangeStatus.Done).unverifiedLine)
     }
 
-    @Test fun liveLineUsesTheModelsReasonAndCollapsesToASummary() = runTest {
+    @Test fun liveLineUsesTheModelsReason() = runTest {
         var now = 1_000L
         val screen = MutableStateFlow(false)
         val vm = ChatViewModel(backgroundScope, state, stage, actions, ConversationStore(tmp.newFolder()), screenOpen = screen, clock = { now },
@@ -878,10 +945,7 @@ class ChatViewModelTest {
         emit(TaskState.Succeeded("有 3 趟\n依据:12306 查询结果页"))
         ex = vm.ui.value.exchanges.single()
         assertEquals(80_000L, ex.elapsedMs)
-        assertEquals("做了 3 步 · 1 分 20 秒", stepsSummary(ex))
         assertFalse(vm.ui.value.operatingPhone)
-        // 不知道用时就只说步数
-        assertEquals("做了 3 步", stepsSummary(ex.copy(elapsedMs = null)))
     }
 
     /** 顶栏副标题「正在操作 …」:最近一件有对象的事所在的 App(包名换成 App 名)。 */
@@ -3756,4 +3820,32 @@ class ChatViewModelTest {
         assertEquals(1, calls.count { it.startsWith("start:") })
     }
 
+    @Test fun projectDraftPersistsOnSendAndDeletesWithProject() = runTest {
+        val conversations = ConversationStore(tmp.newFolder("chats"))
+        val projects = com.wangzan101.mika.chat.ProjectStore(tmp.newFolder("projects"))
+        val resolver = com.wangzan101.mika.chat.WorkspaceResolver(conversations, projects)
+        val p1 = projects.create("科研").getOrThrow()
+        var deletedProjectId: String? = null
+        val vm = ChatViewModel(
+            backgroundScope, state, stage, actions, conversations,
+            appLabel = { it }, activities = acts, steers = steerFlow,
+            projectStore = projects,
+            removeProject = { pid -> deletedProjectId = pid },
+            workspaceResolver = resolver,
+        ).also { runCurrent() }
+
+        vm.newConversation(p1.id)
+        assertEquals(p1.id, vm.ui.value.projectId)
+        vm.input("先建个草稿")
+        val draftId = vm.ui.value.conversationId!!
+        assertEquals(com.wangzan101.mika.cap.sandbox.WorkspaceKey.Project(p1.id), resolver.resolve(draftId))
+        assertTrue(vm.send("先建个草稿", ok))
+        assertEquals(p1.id, conversations.projectId(draftId))
+
+        vm.deleteProject(p1.id)
+        runCurrent()
+        assertEquals(p1.id, deletedProjectId)
+        assertNull(vm.ui.value.conversationId)
+        assertNull(vm.ui.value.projectId)
+    }
 }

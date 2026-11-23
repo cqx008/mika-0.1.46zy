@@ -39,4 +39,4 @@ MiniMax 的官方文档没有给第三方 App 的 OAuth：没有让第三方自�
 
 ### Google 账号（Gemini）
 
-Google 不允许第三方软件借用它的官方工具的 OAuth 客户端去访问后端。第三方要用 AI Studio 或 Vertex AI 的 API Key。Mika 继续用 Gemini 预设填 API Key。
+Google 不允许第三方软件借用它自家工具的 OAuth 客户端去访问后端。第三方要用 AI Studio 或 Vertex AI 的 API Key。Mika 继续用 Gemini 预设填 API Key。

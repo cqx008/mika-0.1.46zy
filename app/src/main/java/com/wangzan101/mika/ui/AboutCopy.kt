@@ -40,11 +40,7 @@ object AboutCopy {
     val QR_SAVE_FAILED: String get() = tr(R.string.about_qr_save_failed)
 
     val FOLLOW: String get() = tr(R.string.about_follow)
-    val FOLLOW_SUB: String get() = tr(R.string.about_follow_sub, WECHAT_ID)
-
-    /** 联系作者的微信号(点整行或长按都可复制)。 */
-    const val WECHAT_ID = "everday6666668"
-    val WECHAT: String get() = tr(R.string.about_wechat_sub)
+    val FOLLOW_SUB: String get() = tr(R.string.about_follow_sub, MikaLinks.X_HANDLE)
 
     val DIAGNOSTICS: String get() = tr(R.string.diagnostics_copy)
     val DIAGNOSTICS_SUB: String get() = tr(R.string.diagnostics_copy_sub)

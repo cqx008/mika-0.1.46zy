@@ -3,7 +3,6 @@ package com.wangzan101.mika.settings
 import android.content.Context
 import android.content.SharedPreferences
 import com.wangzan101.mika.capsule.CapsuleCardScale
-import com.wangzan101.mika.BuildConfig
 import com.wangzan101.mika.capsule.CapsuleDock
 import com.wangzan101.mika.capsule.CardDocking
 import com.wangzan101.mika.capsule.CapsuleIdleOpacity
@@ -58,6 +57,13 @@ class FeatureFlags(private val prefs: SharedPreferences) {
         edit.commit()
     }
 
+    /** 并行任务时最多同时跑几个(用户设定,1–3);真正的上限还要看设备,见 ParallelCapability。 */
+    fun parallelMax(): Int = prefs.getInt(PARALLEL_MAX, ParallelCapability.DEFAULT_MAX)
+
+    fun setParallelMax(max: Int) {
+        prefs.edit().putInt(PARALLEL_MAX, max).commit()
+    }
+
     /**
      * 聊天界面选的「场景模式」:0 普通(关)、1 购物下单;只影响之后发起的任务(按任务生效),
      * 不影响已经在跑/排队的。
@@ -66,13 +72,6 @@ class FeatureFlags(private val prefs: SharedPreferences) {
 
     fun setSceneMode(mode: Int) {
         prefs.edit().putInt(SCENE_MODE, mode.coerceIn(0, 1)).commit()
-    }
-
-    /** 并行任务时最多同时跑几个(用户设定,1–3);真正的上限还要看设备,见 ParallelCapability。 */
-    fun parallelMax(): Int = prefs.getInt(PARALLEL_MAX, ParallelCapability.DEFAULT_MAX)
-
-    fun setParallelMax(max: Int) {
-        prefs.edit().putInt(PARALLEL_MAX, max).commit()
     }
 
     /** 每个任务最多走多少步;null 表示不限制。默认不限制,下次任务起生效。 */
@@ -90,6 +89,17 @@ class FeatureFlags(private val prefs: SharedPreferences) {
 
     fun setTriggerRunMinutes(minutes: Int?) {
         prefs.edit().putInt(TRIGGER_RUN_LIMIT, minutes?.takeIf { it in TRIGGER_RUN_MINUTES } ?: 0).commit()
+    }
+
+    /**
+     * 一个任务里沙箱命令累计最多跑多少分钟(装依赖、编译这类活容易超);只认 [SANDBOX_BUDGET_MINUTES] 里的几档,
+     * 没设或存了别的值按默认(与 [SANDBOX_BUDGET_MS] 一致)算,下一个任务起生效。
+     */
+    fun sandboxBudgetMinutes(): Int =
+        prefs.getInt(SANDBOX_BUDGET_LIMIT, 0).takeIf { it in SANDBOX_BUDGET_MINUTES } ?: DEFAULT_SANDBOX_BUDGET_MINUTES
+
+    fun setSandboxBudgetMinutes(minutes: Int) {
+        prefs.edit().putInt(SANDBOX_BUDGET_LIMIT, minutes.takeIf { it in SANDBOX_BUDGET_MINUTES } ?: 0).commit()
     }
 
     /** 每个任务允许已报告的输入加输出 Token 总量;null 表示不限制,下次任务起生效。 */
@@ -312,8 +322,8 @@ class FeatureFlags(private val prefs: SharedPreferences) {
         awaitClose { prefs.unregisterOnSharedPreferenceChangeListener(listener) }
     }.distinctUntilChanged()
 
-    /** 人格:调试版默认可见,发布版默认关;合并前再决定默认值。 */
-    fun persona(): Boolean = prefs.getBoolean(PERSONA, BuildConfig.DEBUG)
+    /** 人格:默认开。开关留着,出问题时能整体关掉(关掉后界面不显示入口,任务也不读对话上的绑定)。 */
+    fun persona(): Boolean = prefs.getBoolean(PERSONA, true)
 
     fun setPersona(on: Boolean) {
         prefs.edit().putBoolean(PERSONA, on).commit()
@@ -436,13 +446,16 @@ class FeatureFlags(private val prefs: SharedPreferences) {
     }
 
     companion object {
-        private const val SCENE_MODE = "scene_mode"
         const val PREFS = "feature_flags"
         private const val SCHEDULED_QUIET_HOURS = "scheduled_quiet_hours"
         /** 每个任务步数上限能设的最大值;0/null 表示不限制。 */
         const val MAX_TASK_STEP_LIMIT = 500
         /** 定时任务最长运行时间可选的几档(分钟)。 */
         val TRIGGER_RUN_MINUTES = listOf(15, 30, 60, 120)
+        /** 每任务沙箱命令累计时长可选的几档(分钟)。 */
+        val SANDBOX_BUDGET_MINUTES = listOf(30, 60, 120, 240)
+        /** 每任务沙箱命令累计时长没设(或存了档位外的值)时按这个算,与 core 的 [SANDBOX_BUDGET_MS] 一致。 */
+        val DEFAULT_SANDBOX_BUDGET_MINUTES = (com.wangzan101.mika.core.cap.sandbox.SANDBOX_BUDGET_MS / 60_000L).toInt()
         private const val SPEED_FLAGS = "speed_flags"
         /**
          * 提速开关默认值的升级,按先后各做一次(键记下做过没有):v2 打开分级读屏、连续操作、按需看图;
@@ -458,6 +471,7 @@ class FeatureFlags(private val prefs: SharedPreferences) {
         private const val PARALLEL_MAX = "parallel_max"
         private const val TASK_STEP_LIMIT = "task_step_limit"
         private const val TRIGGER_RUN_LIMIT = "trigger_run_limit_minutes"
+        private const val SANDBOX_BUDGET_LIMIT = "sandbox_budget_limit_minutes"
         private const val TASK_TOKEN_BUDGET = "task_token_budget"
         private const val PROACTIVE_DAILY_TOKEN_BUDGET = "proactive_daily_token_budget"
         private const val KEEP_SCREEN_ON = "keep_screen_on"
@@ -473,6 +487,7 @@ class FeatureFlags(private val prefs: SharedPreferences) {
         private const val EXTERNAL_SCHEDULE = "external_schedule"
         private const val PROACTIVE = "proactive"
         private const val PERSONA = "persona"
+        private const val SCENE_MODE = "scene_mode"
         private const val THEME_MODE = "theme_mode"
         private const val PERSONAL_START = "personal_start"
         private const val THEME_ACCENT = "theme_accent"

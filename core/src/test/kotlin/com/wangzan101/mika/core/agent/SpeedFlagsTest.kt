@@ -16,7 +16,7 @@ class SpeedFlagsTest {
         assertEquals(SpeedFlags(inlineScreen = true, replay = true), f)
         assertEquals("inlineScreen,replay", f.describe())
         assertEquals(f, SpeedFlags.parse(f.describe()))
-        val all = SpeedFlags(true, true, true, true, true, true, true, false, true)
+        val all = SpeedFlags(true, true, true, true, true, true, true)
         assertEquals(all, SpeedFlags.parse(all.describe()))
         assertEquals(SpeedFlags(adaptiveVision = true), SpeedFlags.parse("adaptiveVision"))
         val tables = SpeedFlags(tablesAtBirth = true)

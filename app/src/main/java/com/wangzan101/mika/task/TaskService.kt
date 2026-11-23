@@ -61,8 +61,11 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.plus
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.flow.collectLatest
@@ -102,8 +105,14 @@ class TaskService : Service() {
     /** 最近一次 start 时读到的开关;关着时登记处上限恒为 1。 */
     @Volatile private var parallel = false
     private val center by lazy {
-        TaskCenter<TaskRun>(::limit, { it.conversationId }, { it.key }, (application as com.wangzan101.mika.MikaApp).runStore,
-            (application as com.wangzan101.mika.MikaApp).resources, (application as com.wangzan101.mika.MikaApp).followUpQueue) { c, g ->
+        val app = application as com.wangzan101.mika.MikaApp
+        val wsOf: (String) -> String = { id -> com.wangzan101.mika.chat.WorkspaceResolver.resolveFor(app, id).wire }
+        TaskCenter<TaskRun>(
+            ::limit, { it.conversationId }, { it.key }, app.runStore,
+            app.resources, app.followUpQueue,
+            workspaceOf = { wsOf(it.conversationId) },
+            resolveWorkspace = wsOf,
+        ) { c, g ->
             TaskRun(c, g, this, scope, freeSlot(), parallel)
         }
     }
@@ -218,6 +227,119 @@ class TaskService : Service() {
     internal fun otherRunHasDisplay(run: TaskRun) = center.running().any { it !== run && it.displayId.value >= 0 }
     internal fun hasActiveRuns() = center.running().isNotEmpty()
     internal fun hasQueuedRuns() = center.queued().isNotEmpty()
+
+    // ---------- 任务解锁手机后的自动回锁 ----------
+
+    /** 回锁义务:留到最后一个在跑或排队的任务结束;系统确认已锁之前一直挂着。 */
+    private val taskRelock = TaskRelock()
+    private val relockMutex = Mutex()
+
+    /** 一次任务驱动的解锁完成:以此刻的主屏交互计数为基线,并挂上常驻提醒(见 [startUnlockGuard])。 */
+    internal fun noteTaskUnlock() = taskRelock.unlocked(
+        com.wangzan101.mika.cap.phone.a11y.ScreenAccessibility.mainInteractionCount())
+
+    /**
+     * 任务收尾时调用([ignore] 是正在收尾的这个)。还有任务在跑或排队就等;都结束了才裁决:
+     * 已锁→了结;不能锁(无障碍不在、或还留着一页)→警告;等待期里用户动了主屏→等一段空闲再裁;
+     * 否则经全局动作回锁,并轮询等系统确认,两次不确认就换成常驻警告。
+     */
+    internal suspend fun finishTaskRelock(ignore: TaskRun? = null) = relockMutex.withLock {
+        val keyguard = getSystemService(android.app.KeyguardManager::class.java)
+        fun count() = com.wangzan101.mika.cap.phone.a11y.ScreenAccessibility.mainInteractionCount()
+        fun runsRemain() = center.runs().any { it !== ignore }
+        fun accessibility() = com.wangzan101.mika.cap.phone.a11y.ScreenAccessibility.instance.value
+        fun decision() = taskRelock.decide(
+            runsRemain = runsRemain(), locked = systemLockConfirmed(keyguard), interactions = count(),
+            canLock = accessibility() != null && keeper.page.value == null,
+        )
+        var result = decision()
+        if (result == TaskRelock.Decision.WAIT_IDLE) {
+            val before = count()
+            delay(RELOCK_IDLE_GRACE_MS)
+            if (!taskRelock.acceptIdle(before, count())) { notifyRelockFailed(); return@withLock }
+            result = decision()
+        }
+        when (result) {
+            TaskRelock.Decision.NONE -> { clearUnlockGuardIfSafe(); return@withLock }
+            TaskRelock.Decision.WAIT -> return@withLock
+            TaskRelock.Decision.WARN, TaskRelock.Decision.WAIT_IDLE -> { notifyRelockFailed(); return@withLock }
+            TaskRelock.Decision.LOCK -> Unit
+        }
+        repeat(2) {
+            // 重试间隙里来了新任务、或用户动了手机:这次回锁一律让位,重新裁决
+            when (decision()) {
+                TaskRelock.Decision.NONE -> { clearUnlockGuardIfSafe(); return@withLock }
+                TaskRelock.Decision.WAIT -> return@withLock
+                TaskRelock.Decision.WARN, TaskRelock.Decision.WAIT_IDLE -> { notifyRelockFailed(); return@withLock }
+                TaskRelock.Decision.LOCK -> Unit
+            }
+            val accepted = accessibility()?.performGlobalAction(android.accessibilityservice.AccessibilityService.GLOBAL_ACTION_LOCK_SCREEN) == true
+            if (accepted) repeat(RELOCK_POLL_TRIES) {
+                if (systemLockConfirmed(keyguard)) {
+                    taskRelock.confirmed()
+                    clearUnlockGuardIfSafe()
+                    return@withLock
+                }
+                delay(RELOCK_POLL_MS)
+            }
+        }
+        notifyRelockFailed()
+    }
+
+    /** 系统意义上的已锁:锁屏在显示;有安全锁的还要求设备层也锁上。 */
+    private fun systemLockConfirmed(keyguard: android.app.KeyguardManager): Boolean =
+        keyguard.isKeyguardLocked && (!keyguard.isKeyguardSecure || keyguard.isDeviceLocked)
+
+    /**
+     * 解锁期间挂的常驻提醒:任务被中断、进程没了它也留在通知栏,提醒用户检查锁屏。
+     * 通知发不出去(权限、渠道被关)时回锁义务立不住,调用方据此不去解锁。
+     */
+    internal fun startUnlockGuard(): Boolean {
+        ensureChannels(this)
+        val manager = getSystemService(NotificationManager::class.java)
+        val channel = manager.getNotificationChannel(CHANNEL_ATTENTION) ?: return false
+        if (!manager.areNotificationsEnabled() || channel.importance == NotificationManager.IMPORTANCE_NONE) return false
+        return runCatching {
+            manager.notify(ID_RELOCK, Notification.Builder(this, CHANNEL_ATTENTION).setSmallIcon(R.drawable.ic_notification)
+                .setContentTitle(tr(R.string.relock_guard_title))
+                .setContentText(tr(R.string.relock_guard_body))
+                .setStyle(Notification.BigTextStyle().bigText(tr(R.string.relock_guard_body)))
+                .setContentIntent(openApp()).setOngoing(true).build())
+            true
+        }.getOrDefault(false)
+    }
+
+    /** 没有挂着的回锁义务时摘掉常驻提醒;义务还挂着(别的任务解的)不能摘。 */
+    internal fun clearUnlockGuardIfSafe() {
+        if (!taskRelock.hasPending()) runCatching { getSystemService(NotificationManager::class.java).cancel(ID_RELOCK) }
+    }
+
+    /** 回锁没能确认:同一个编号的常驻警告换上岗,用户看到之前一直在。 */
+    internal fun notifyRelockFailed() {
+        ensureChannels(this)
+        runCatching {
+            getSystemService(NotificationManager::class.java).notify(ID_RELOCK,
+                Notification.Builder(this, CHANNEL_ATTENTION).setSmallIcon(R.drawable.ic_notification)
+                    .setContentTitle(tr(R.string.relock_failed_title))
+                    .setContentText(tr(R.string.relock_failed_body))
+                    .setStyle(Notification.BigTextStyle().bigText(tr(R.string.relock_failed_body)))
+                    .setContentIntent(openApp()).setOngoing(true).build())
+        }
+    }
+
+    /** 解锁失败后转为等用户手动解锁:发一条可点回对话的提醒([status] 是不含凭据的状态码)。 */
+    internal fun notifyUnlockRecoveryNeeded(conversationId: String, status: String) {
+        ensureChannels(this)
+        val safeStatus = status.takeIf { it.matches(Regex("[a-z_]{1,50}")) }.orEmpty()
+        val message = tr(R.string.unlock_recovery_body) + if (safeStatus.isBlank()) "" else " ($safeStatus)"
+        runCatching {
+            getSystemService(NotificationManager::class.java).notify(nextResultId(),
+                Notification.Builder(this, CHANNEL_ATTENTION).setSmallIcon(R.drawable.ic_notification)
+                    .setContentTitle(tr(R.string.unlock_recovery_title)).setContentText(message)
+                    .setStyle(Notification.BigTextStyle().bigText(message))
+                    .setContentIntent(openApp(conversationId)).setAutoCancel(true).build())
+        }
+    }
 
     private val pocketGuard by lazy { com.wangzan101.mika.pocket.PocketGuardManager(this) }
 
@@ -355,12 +477,24 @@ class TaskService : Service() {
         return app.teachReady && app.teach.blocksTasks()
     }
 
+    /** A start rejected before a TaskRun exists still has to close its external owners. */
+    private fun finishRejectedStart(triggerKey: String?, mcpExternalId: String?) {
+        val reason = tr(R.string.teach_blocked_task)
+        triggerKey?.let { TriggerRuntime.actionFailed(this, it, reason) }
+        mcpExternalId?.let {
+            (application as com.wangzan101.mika.MikaApp).remoteTasks.ended(
+                it, TaskState.Failed(reason, FailKind.Environment), emptyList(),
+            )
+        }
+    }
+
     private fun begin(newGoal: String, requestedConversation: String?,
         provenance: RunProvenance = RunProvenance(), triggerKey: String? = null,
         triggerActionGoal: String? = null, triggerThreadId: String? = null, mcpExternalId: String? = null, messageId: String? = null,
         channelPeer: ChannelPeer? = null, channelMessageId: String? = null, triggerCondition: String? = null, workflowAttemptId: String? = null,
         sceneIntent: String? = null) {
         if (teachingBlocks()) {
+            finishRejectedStart(triggerKey, mcpExternalId)
             if (provenance.origin == RunOrigin.Ui) {
                 android.widget.Toast.makeText(this, tr(R.string.teach_blocked_task), android.widget.Toast.LENGTH_LONG).show()
             }
@@ -402,8 +536,10 @@ class TaskService : Service() {
         provenance: RunProvenance = RunProvenance(), triggerKey: String? = null,
         triggerActionGoal: String? = null, triggerThreadId: String? = null, mcpExternalId: String? = null,
         followUp: QueuedFollowUp? = null, triggerCondition: String? = null,
-        channelPeer: ChannelPeer? = null, channelMessageId: String? = null, workflowAttemptId: String? = null, sceneIntent: String? = null) {
+        channelPeer: ChannelPeer? = null, channelMessageId: String? = null, workflowAttemptId: String? = null,
+        sceneIntent: String? = null) {
         if (teachingBlocks()) {
+            finishRejectedStart(triggerKey, mcpExternalId)
             if (followUp != null) center.followUps.add(followUp)
             else if (provenance.origin == RunOrigin.Ui) {
                 android.widget.Toast.makeText(this, tr(R.string.teach_blocked_task), android.widget.Toast.LENGTH_LONG).show()
@@ -436,6 +572,7 @@ class TaskService : Service() {
                 r.run.workflowAttemptId = workflowAttemptId
                 r.run.channelPeer = channelPeer
                 r.run.channelMessageId = channelMessageId
+                r.run.sceneIntentOverride = sceneIntent
                 acceptChannel(r.run)
                 acknowledgeChannel(channelPeer, channelMessageId)
                 taskState._busy.value = true
@@ -554,7 +691,7 @@ class TaskService : Service() {
             stopRunId?.let { id -> taskState._summarizing.update { it + id } }
             run.mcpExternalId?.let { (application as com.wangzan101.mika.MikaApp).remoteTasks.ended(it, end, run.steers.value, run.runId.value, run.sharedFiles.value) }
             run.end(end)
-            if (!run.conditionCheck) recordTurn(store, run, end, run.runId.value, run.sharedFiles.value, run.audios.value, run.joinedSteers(), run.usedGroups, run.joinedInterrupted(), run.joinedFinished())
+            if (!run.conditionCheck) recordTurn(store, run, end, run.runId.value, run.sharedFiles.value, run.audios.value, run.photos.value, run.joinedSteers(), run.usedGroups, run.joinedInterrupted(), run.joinedFinished())
             // Sequential workflows must know whether the step actually completed before dispatching the next one.
             // Reuse the existing outcome judge once; unknown/partial results remain for the user to resolve.
             val workflowJudged = if (run.workflowAttemptId != null) runCatching { run.settleOutcome(end, store) }.getOrNull() else null
@@ -601,11 +738,10 @@ class TaskService : Service() {
                 center.markResult(run, describe(end).second, deliveryId, successful = end is TaskState.Succeeded)
                 RunLearning.launchAfter(MemoryRuntime.of(this@TaskService).scope + meter, {
                     delivered = notifyResult(run, delivery) == DeliveryState.Delivered
-                    // 定时任务的结果当场按结局记(和以前一样),判下来没办成再改记;不靠服务一直在
-                    if (delivered) run.triggerWindowKey?.let { key ->
+                    // 失败结局不需要额外判定,送达后立即结束定时窗口。
+                    if (delivered && end !is TaskState.Succeeded) run.triggerWindowKey?.let { key ->
                         runCatching {
-                            if (end is TaskState.Succeeded) TriggerRuntime.delivered(app, key)
-                            else TriggerRuntime.actionFailed(app, key, describe(end).second)
+                            TriggerRuntime.actionFailed(app, key, describe(end).second)
                         }.onFailure { Log.w(TAG, "could not record trigger result", it) }
                     }
                 }) {
@@ -616,6 +752,9 @@ class TaskService : Service() {
                     if (delivered && notDone && end is TaskState.Succeeded) run.triggerWindowKey?.let { key ->
                         runCatching { TriggerRuntime.actionFailed(app, key, judged?.reason?.ifBlank { null } ?: describe(end).second) }
                             .onFailure { Log.w(TAG, "could not downgrade trigger result", it) }
+                    } else if (delivered && end is TaskState.Succeeded) run.triggerWindowKey?.let { key ->
+                        runCatching { TriggerRuntime.delivered(app, key) }
+                            .onFailure { Log.w(TAG, "could not record trigger result", it) }
                     }
                     if (run.provenance.origin == RunOrigin.Ui && run.workflowAttemptId == null) runCatching { run.learnAfter(end, judged?.outcome, store) }
                         .onFailure { Log.w(TAG, "learning after run failed", it) }
@@ -730,8 +869,12 @@ class TaskService : Service() {
         run.workflowAttemptId?.let { attempt ->
             (application as com.wangzan101.mika.MikaApp).workflowInterrupted(attempt)
         }
+        run.triggerWindowKey?.let { key ->
+            TriggerRuntime.actionFailed(this, key, Conversation.CANCELLED_OUTCOME)
+        }
         run.end(TaskState.Cancelled)
         recordTurn(ConversationStore.shared(this), run, TaskState.Cancelled, null, audios = run.audios.value)
+        run.mcpExternalId = null
         publishRuns()
         center.queued().forEachIndexed { i, q -> q.queue(i + 1) }
         drainReady(run.conversationId)
@@ -785,6 +928,7 @@ class TaskService : Service() {
     /** 任务结束时记一轮,后续消息可带上它作参考。写盘失败不影响任务结果。 */
     private fun recordTurn(store: ConversationStore, run: TaskRun, end: TaskState, runId: String?, files: List<SharedFile> = emptyList(),
         audios: List<com.wangzan101.mika.core.chat.GeneratedAudio> = emptyList(),
+        photos: List<com.wangzan101.mika.core.chat.GeneratedPhoto> = emptyList(),
         steers: List<String> = emptyList(), groups: List<String> = emptyList(), interrupted: List<String> = emptyList(),
         finished: List<String> = emptyList()) {
         val goal = run.triggerCondition ?: run.goal
@@ -796,7 +940,7 @@ class TaskService : Service() {
             TaskState.Cancelled -> Turn(goal, Conversation.CANCELLED_OUTCOME, "cancelled", outcomeSystemType = "task_cancelled")
             else -> return
         }.copy(runId = runId, remoteTaskId = run.mcpExternalId, steers = steers, groups = groups, interruptedReplies = interrupted, finishedReplies = finished,
-            audios = audios)
+            audios = audios, photos = photos)
             // 这一轮留下了一页:记下站点(已经关了的连同原因),对话页那一轮下面据此显示
             .let { t -> keeper.recordFor(runId)?.let { (host, closed) -> t.copy(keptPage = host, keptPageClosed = closed) } ?: t }
         runCatching { store.append(run.conversationId, turn, files) }.onFailure { Log.w(TAG, "could not save conversation turn", it) }
@@ -1054,6 +1198,8 @@ class TaskService : Service() {
             taskState.shownRun = null
         }
         taskState._busy.value = false // 收尾被取消时也不能一直挡着新任务
+        runCatching { TriggerRuntime.recoverAfterServiceStop(this) }
+            .onFailure { Log.w(TAG, "could not recover trigger windows after service stop", it) }
         super.onDestroy()
     }
 
@@ -1133,12 +1279,11 @@ class TaskService : Service() {
         const val ACTION_DECLINE = "com.wangzan101.mika.task.DECLINE"
         /** 定时任务连着失败到这么多次(含这次)起,结果通知里写明连续失败。 */
         internal const val FAILURE_STREAK_NOTICE = 3
+        private const val EXTRA_GOAL = "goal"
+        private const val EXTRA_MESSAGE_ID = "message_id"
         private const val EXTRA_SOURCE = "source"
         private const val EXTRA_SCENE_INTENT = "scene_intent"
-        private const val EXTRA_GOAL = "goal"
         private const val EXTRA_CONVERSATION = "conversation"
-        private const val EXTRA_MESSAGE_ID = "message_id"
-        /** 界面选的「场景模式」意图(commerce/payment);给了就不用关键词猜。 */
         private const val EXTRA_TRIGGER_KEY = "trigger_key"
         private const val EXTRA_TRIGGER_ACTION = "trigger_action"
         private const val EXTRA_TRIGGER_THREAD = "trigger_thread"
@@ -1169,6 +1314,13 @@ class TaskService : Service() {
         private const val ID_ATTENTION = 3
         /** 留在后台的那一页的常驻通知(全局只有一页,不分槽位)。 */
         private const val ID_KEPT = 4
+        /** 解锁守卫与回锁失败警告共用的编号(全局一个,警告换下守卫)。 */
+        private const val ID_RELOCK = 5
+        /** 回锁前等主屏空闲的宽限:等待期里用户动过主屏时,这段没再动才锁。 */
+        private const val RELOCK_IDLE_GRACE_MS = 5_000L
+        /** 回锁动作发出后等系统确认的次数与间隔。 */
+        private const val RELOCK_POLL_TRIES = 20
+        private const val RELOCK_POLL_MS = 100L
         private const val REQUEST_CLOSE_KEPT = 99
         /** 第 n 个槽位的任务通知编号与请求码都加 n × 它;第一个槽位与只跑一个任务时一样。 */
         private const val SLOT_STRIDE = 100
@@ -1192,6 +1344,7 @@ class TaskService : Service() {
                 .putExtra(EXTRA_WORKFLOW_ATTEMPT, attemptId))
         }
 
+        /** 开始任务;其他对话忙时排队。messageId 非空时按插话处理。 */
         fun start(context: Context, goal: String, conversationId: String? = null, messageId: String? = null, sceneIntent: String? = null) {
             if (FeatureFlags.get(context).quitRequested()) return
             context.startForegroundService(

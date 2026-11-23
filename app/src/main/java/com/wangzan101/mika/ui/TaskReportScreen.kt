@@ -61,7 +61,7 @@ internal fun rememberReport(vm: TaskReportViewModel): Pair<Boolean, TaskReport?>
 }
 
 @Composable
-fun TaskReportScreen(vm: TaskReportViewModel, onBack: () -> Unit, onReplay: (Int?) -> Unit, onTimeline: () -> Unit, onFeedback: (() -> Unit)? = null) {
+fun TaskReportScreen(vm: TaskReportViewModel, onBack: () -> Unit, onReplay: (Int?) -> Unit, onTimeline: () -> Unit) {
     BackHandler(onBack = onBack)
     val (loaded, report) = rememberReport(vm)
     val c = MikaTheme.colors
@@ -106,14 +106,6 @@ fun TaskReportScreen(vm: TaskReportViewModel, onBack: () -> Unit, onReplay: (Int
                 }
                 item("replay") { MikaButton(stringResource(R.string.playback_title), { onReplay(null) }, Modifier.fillMaxWidth(), kind = ButtonKind.Primary) }
                 item("timeline") { MikaButton(stringResource(R.string.chat_view_process), onTimeline, Modifier.fillMaxWidth(), kind = ButtonKind.Tonal, size = ButtonSize.Small) }
-                onFeedback?.let { cb ->
-                    item("feedback") {
-                        Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
-                            MikaButton(stringResource(R.string.feedback_official), cb, Modifier.fillMaxWidth(), kind = ButtonKind.Tonal, size = ButtonSize.Small)
-                            Text(stringResource(R.string.feedback_official_sub), style = MikaType.Hint, color = c.ink3, textAlign = androidx.compose.ui.text.style.TextAlign.Center)
-                        }
-                    }
-                }
                 item("privacy") { Text(stringResource(R.string.report_local_note), style = MikaType.Hint, color = c.ink2) }
             }
         }

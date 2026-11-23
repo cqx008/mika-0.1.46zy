@@ -19,8 +19,8 @@ android {
         applicationId = "com.wangzan101.mika"
         minSdk = 29
         targetSdk = 35
-        versionCode = 49
-        versionName = "0.1.46zy"
+        versionCode = 52
+        versionName = "0.1.51zy"
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
         buildConfigField("String", "GIT_HASH", "\"$gitHash\"")
         // 可配置后端的基础 URL:账号/反馈/更新都挂在它下面。
@@ -108,6 +108,7 @@ dependencies {
     implementation(libs.compose.ui)
     implementation(libs.compose.material3)
     implementation(libs.androidx.activity.compose)
+    implementation(libs.androidx.window)
     implementation(libs.androidx.webkit)
     implementation(libs.kotlinx.coroutines.android)
     implementation(libs.okhttp)
@@ -138,6 +139,8 @@ dependencies {
     debugImplementation(libs.compose.ui.test.manifest)
     androidTestImplementation(libs.androidx.test.runner)
     androidTestImplementation(libs.androidx.test.ext.junit)
+    // Compose BOM 的旧传递版本在 Android 17 上调用已移除的 InputManager.getInstance。
+    androidTestImplementation(libs.androidx.test.espresso)
     androidTestImplementation(libs.okhttp.mockwebserver)
     androidTestImplementation(libs.junit)
 }

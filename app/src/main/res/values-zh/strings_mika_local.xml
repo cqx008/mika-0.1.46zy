@@ -1,10 +1,6 @@
 <?xml version="1.0" encoding="utf-8"?>
 <!-- 自有特性中文资源(0.1.46zx 恢复自 46zv) -->
 <resources>
-<string name="about_wechat_sub">微信号：长按右侧 ID 复制</string>
-<string name="about_follow">联系作者</string>
-<string name="about_follow_sub">微信 %1$s，长按可复制</string>
-<string name="feedback_fixed">你有 %1$d 条反馈已修复 ✓</string>
 <string name="mika_guide_title">注册 mika 账号并填商汤 key，解锁商汤免费模型</string>
 <string name="mika_guide_note">登录后填上你自己的商汤 key 就能用商汤免费模型；也可以跳过，改用其他服务商。</string>
 <string name="mika_guide_button">注册 / 登录</string>

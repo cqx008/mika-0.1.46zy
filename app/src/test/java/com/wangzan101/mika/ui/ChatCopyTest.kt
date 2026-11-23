@@ -16,16 +16,25 @@ import java.time.ZoneId
 class ChatCopyTest {
     @get:Rule val texts = ChineseTexts()
 
-    @Test fun sixDistinctExamplesStartWithGithubStar() {
+    @Test fun fiveDistinctExamplesStartWithGithubStar() {
         val examples = ChatCopy.examples
-        assertEquals(6, examples.size)
-        assertEquals(6, examples.map { it.title }.filter { it.isNotBlank() }.toSet().size)
-        assertEquals(6, examples.map { it.prompt }.filter { it.isNotBlank() }.toSet().size)
+        assertEquals(5, examples.size)
+        assertEquals(5, examples.map { it.title }.filter { it.isNotBlank() }.toSet().size)
+        assertEquals(5, examples.map { it.prompt }.filter { it.isNotBlank() }.toSet().size)
+        assertEquals(examples.size, examples.map { it.kind }.toSet().size)
         assertEquals(ChatCopy.ExampleKind.Web, examples.first().kind)
         assertTrue(examples.first().prompt.contains("https://github.com/wangzan101/mika"))
         // 短标题上卡片、完整提示词进输入框:两者分开存
         assertEquals(ChatCopy.examples.map { it.title }, ChatCopy.recommendationSeeds().map { it.first })
         assertEquals(ChatCopy.examples.map { it.prompt }, ChatCopy.recommendationSeeds().map { it.second })
+    }
+
+    /** 卡片图标按类型挑:提示词和内置示例一字不差才认得出;自己加的任务显示通用图标。 */
+    @Test fun kindsOnlyMatchTheBuiltInExamples() {
+        val examples = ChatCopy.examples
+        examples.forEach { assertEquals(it.kind, ChatCopy.kindOf(it.prompt)) }
+        assertNull(ChatCopy.kindOf("打开设置，把字体调大"))
+        assertNull(ChatCopy.kindOf(examples.first().prompt + "，再顺手点个 watch"))
     }
 
     @Test fun taskCostShowsTwoDecimalPlaces() {
@@ -264,5 +273,43 @@ class ChatCopyTest {
         assertEquals("继续说点什么…", ChatCopy.placeholder(ComposerMode.Idle, hasHistory = true))
         assertEquals("回答 Mika 的问题", ChatCopy.placeholder(ComposerMode.Answer, hasHistory = true))
         assertEquals("补充或改要求…", ChatCopy.placeholder(ComposerMode.Busy, hasHistory = true))
+    }
+
+    @Test fun drawerSectionsGroupsProjectChatsAndIncludesThemInSelectableIds() {
+        val p1 = com.wangzan101.mika.chat.Project(id = "p1", name = "科研")
+        val p2 = com.wangzan101.mika.chat.Project(id = "p2", name = "空项目")
+        val all = listOf(
+            ConversationSummary("c-p1-recent", "普通成员", 10L, projectId = p1.id),
+            ConversationSummary("c-p1-pinned", "置顶成员", 5L, pinnedAt = 99L, projectId = p1.id),
+            ConversationSummary("c-solo", "独立对话", 20L),
+            ConversationSummary("c-orphan", "已删项目的对话", 15L, projectId = "missing"),
+        )
+        val s = drawerSections(
+            all,
+            CurrentConversation(null, false, "", ""),
+            emptyList(),
+            { null },
+            canSwitch = true,
+            now = 0L,
+            zone = zone,
+            projects = listOf(p1, p2),
+        )
+        assertEquals(2, s.projects.size)
+        assertEquals(listOf("c-p1-pinned", "c-p1-recent"), s.projects[0].rows.map { it.id })
+        assertEquals(listOf("科研", "科研"), s.projects[0].rows.map { it.projectName })
+        assertEquals(emptyList<String>(), s.projects[1].rows.map { it.id })
+        assertEquals(listOf("c-solo", "c-orphan"), s.recent.map { it.id })
+        assertEquals(setOf("c-p1-pinned", "c-p1-recent", "c-solo", "c-orphan"), drawerSelectableIds(s, emptyList(), archivedView = false))
+    }
+
+    @Test fun sandboxCopyMarksProjectWorkspacesDistinctly() {
+        val projectWs = com.wangzan101.mika.cap.sandbox.WorkspaceUsage(
+            dirName = "p-proj1", conversationId = null, title = "Mika 开发", bytes = 1024L, busy = false, projectId = "proj1",
+        )
+        val chatWs = com.wangzan101.mika.cap.sandbox.WorkspaceUsage(
+            dirName = "c-chat1", conversationId = "chat1", title = "闲聊", bytes = 512L, busy = false, projectId = null,
+        )
+        assertEquals("项目 · Mika 开发", SandboxCopy.workspaceTitle(projectWs))
+        assertEquals("闲聊", SandboxCopy.workspaceTitle(chatWs))
     }
 }

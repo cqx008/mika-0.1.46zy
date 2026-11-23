@@ -1,9 +1,6 @@
 <?xml version="1.0" encoding="utf-8"?>
-<!-- 自有特性:商汤账号/工单后台/购物场景/关于页(0.1.46zx 恢复自 46zv) -->
+<!-- 自有特性默认(英文)资源(0.1.46zx 恢复自 46zv) -->
 <resources>
-<string name="about_wechat_sub">WeChat: long press the ID on the right to copy</string>
-<string name="about_follow">Contact the author</string>
-<string name="about_follow_sub">WeChat %1$s, long press to copy</string>
 <string name="feedback_fixed">%1$d of your reports have been fixed ✓</string>
 <string name="mika_guide_title">Register a Mika account and fill in a SenseNova key to use the free SenseNova model</string>
 <string name="mika_guide_note">SenseNova models are enabled after you sign in and fill in your own SenseNova key. Skip it and connect any provider instead.</string>

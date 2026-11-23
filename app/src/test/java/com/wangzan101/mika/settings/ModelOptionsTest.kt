@@ -51,7 +51,7 @@ class ModelOptionsTest {
         assertEquals(null, ModelOptions.defaultMain(ModelOptions.merge(listOf(ListedModel("embed", toolCalls = false)), base)))
     }
 
-    /** 先该预设的模型(预设的模型词),再接口明说能调用工具的,其余照列表顺序;明说不会调用工具的、像向量 / 语音 / 画图的不试。 */
+    /** 先自家的(预设的模型词),再接口明说能调用工具的,其余照列表顺序;明说不会调用工具的、像向量 / 语音 / 画图的不试。 */
     @Test fun candidatesPreferTheProvidersOwnFamily() {
         val listed = listOf(
             ListedModel("antdigital/Ling-3.1-flash", toolCalls = true),
@@ -81,7 +81,7 @@ class ModelOptionsTest {
 
     private fun ids(listed: List<ListedModel>, tokens: List<String>) = ModelOptions.candidates(ModelOptions.merge(listed, base), tokens)
 
-    /** 该预设的模型模型按版本新的在前,不管接口给的顺序;同版本的照列表顺序,不评 flash、pro、lite 哪个好。 */
+    /** 自家的模型按版本新的在前,不管接口给的顺序;同版本的照列表顺序,不评 flash、pro、lite 哪个好。 */
     @Test fun ownModelsNewestVersionFirst() {
         assertEquals(
             listOf("x4", "x-3.1-pro", "x-3-flash", "x-3-pro", "x-2.5-flash", "x-2.0-flash-001"),
@@ -117,7 +117,7 @@ class ModelOptionsTest {
         )
     }
 
-    /** 外层先后不变:该预设的模型在前,再是接口明说能调用工具的;版本只在该预设同一档里比,别家的照列表顺序。 */
+    /** 外层先后不变:自家的在前,再是接口明说能调用工具的;版本只在自家同一档里比,别家的照列表顺序。 */
     @Test fun versionOrderStaysInsideTheOuterOrder() {
         val listed = listOf(
             ListedModel("other-9"),
@@ -128,7 +128,7 @@ class ModelOptionsTest {
             ListedModel("other-5"),
         )
         assertEquals(listOf("x-2", "x-1", "x-3", "other-1", "other-9", "other-5"), ids(listed, listOf("x")))
-        // 没有该预设的模型词:照旧,不按版本排
+        // 没有自家的词:照旧,不按版本排
         assertEquals(listOf("x-1", "x-2", "other-1", "other-9", "x-3", "other-5"), ids(listed, emptyList()))
     }
 
@@ -226,5 +226,28 @@ class ModelOptionsTest {
         assertEquals(listOf("a", "b", "typed"), options.map { it.id })
         assertTrue("已有配置的用配置里的能力", options.first { it.id == "b" }.capabilities.vision)
         assertEquals(emptyList<String>(), ModelOptions.ofProvider(p.copy(models = null), emptyList()).map { it.id })
+    }
+
+    @Test fun ttsMarksDoNotFilterThePicker() {
+        val ids = listOf("fishaudio/drama-3-int4", "renamed-model", "vendor/chat-tts", "speech-endpoint")
+        val catalog = ids.map { ListedModel(it, chat = false) }
+        val p = Provider("p", "Local", ProviderConfig.Kind.OpenAiCompat, "https://local.test/v1", models = catalog)
+        assertEquals(ids.toSet(), ModelOptions.ofProvider(p, emptyList()).map { it.id }.toSet())
+        for (id in ids) {
+            val marked = p.copy(ttsModels = setOf(id))
+            assertEquals(ids.toSet(), ModelOptions.ofProvider(marked, emptyList()).map { it.id }.toSet())
+            assertEquals(ids.toSet(), ModelOptions.ofProvider(marked, emptyList(), includeTts = true).map { it.id }.toSet())
+        }
+    }
+
+    /** 只写了 Mika 不会说的协议的模型:对话用途的选择器不列(调用必然失败),服务商详情和声音模型照样列出。 */
+    @Test fun unusableModelsAreHiddenFromRolePickersButShownInTheFullCatalog() {
+        val p = Provider("p", "Local", ProviderConfig.Kind.OpenAiCompat, "https://local.test/v1", models = listOf(
+            ListedModel("chat-model"),
+            ListedModel("speech-only", unsupportedApis = listOf("/v1/audio/speech")),
+            ListedModel("routed", unsupportedApis = listOf("/v1/audio/speech"), endpoint = ModelEndpoint(ModelProtocol.ChatCompletions, "https://local.test/v1")),
+        ))
+        assertEquals(listOf("chat-model", "routed"), ModelOptions.ofProvider(p, emptyList()).map { it.id })
+        assertEquals(setOf("chat-model", "speech-only", "routed"), ModelOptions.ofProvider(p, emptyList(), includeTts = true).map { it.id }.toSet())
     }
 }

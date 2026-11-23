@@ -21,9 +21,12 @@ import com.wangzan101.mika.capsule.CapsuleMode
 import com.wangzan101.mika.core.agent.SpeedFlags
 import com.wangzan101.mika.core.cap.sandbox.SandboxStatus
 import com.wangzan101.mika.core.shell.BuiltinShellStatus
+import com.wangzan101.mika.core.shell.ShellTransport
+import com.wangzan101.mika.core.shell.ShizukuPlatformState
 import com.wangzan101.mika.settings.AccessibilityState
 import com.wangzan101.mika.settings.Problem
 import com.wangzan101.mika.settings.SystemStatus
+import com.wangzan101.mika.settings.WebSearchConfig
 import com.wangzan101.mika.task.ParallelCapability
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
@@ -77,6 +80,43 @@ class SettingsScreenTest {
         for (v in listOf("DeepSeek", "可用", "正常", "0.1.0")) {
             scrollTo(v)
             compose.onNodeWithText(v).assertIsDisplayed()
+        }
+    }
+
+    @Test
+    fun homeOmitsStaticEntrySubtitles() {
+        compose.setContent {
+            SettingsContent(
+                status = ready, androidRelease = "14", mainModel = "DeepSeek", onBack = {}, onProblem = {}, onOpenModels = {},
+                onOpenCalls = {}, onOpenWechat = {}, onOpenProactive = {}, onOpenAppAccess = {}, onOpenSmsLogin = {},
+                onOpenDuringWork = {}, capsuleMode = CapsuleMode.Always, onOpenCapsule = {}, onOpenNotifications = {},
+                onOpenMemory = {}, onOpenBackup = {}, onOpenRecommendations = {}, onOpenPersonas = {}, onOpenAdvanced = {},
+                versionName = "0.1.0", onOpenAbout = {}, onPersonalStart = {}, autoArchiveDays = 7, onOpenAutoArchive = {},
+            )
+        }
+        val staticCopy = listOf(
+            "模型已配置 · 手机操作可用",
+            "模型、服务商与 Token 用量",
+            "实时语音 · 运营商电话",
+            "在微信里给 Mika 安排任务",
+            "读取所选 App 的通知",
+            "自主模式、操作节奏、步数上限与声音",
+            "用别的 App 时，在屏幕上看任务进展",
+            "选择 Mika 和你说话的方式",
+            "什么时候弹出、去系统里改",
+            "把个人助手设为 Mika 首屏",
+            "记忆、技能、操作路线与网站登录",
+            "把全部数据导出成一个 ZIP 文件，或从 ZIP 恢复",
+            "太久没有新消息的对话自动收进归档",
+            "管理常用任务的名称和内容",
+            "按应用设置禁用和屏幕分享许可",
+            "默认关闭 · 本机可信配置",
+            "扩展、网络、运行环境与维护",
+        )
+        for (text in staticCopy) compose.onAllNodesWithText(text).assertCountEquals(0)
+        for (value in listOf("DeepSeek", "可用", "正常", "7 天", "0.1.0")) {
+            scrollTo(value)
+            compose.onNodeWithText(value).assertIsDisplayed()
         }
     }
 
@@ -160,9 +200,8 @@ class SettingsScreenTest {
         compose.onNodeWithText("已开启").assertIsDisplayed()
         compose.onNodeWithText("无线调试已关").assertIsDisplayed()
         compose.onNodeWithText("安卓 14").assertIsDisplayed()
-        compose.onNodeWithText("满足").assertIsDisplayed()
-        compose.onNodeWithText(PhoneSetupCopy.usageNote(HelperRestart.None)).assertExists()
-        compose.onNodeWithText(PhoneSetupCopy.REPAIR).performClick()
+        compose.onNodeWithText(PhoneSetupCopy.usageNote(HelperRestart.None)).performScrollTo().assertExists()
+        compose.onNodeWithText(PhoneSetupCopy.REPAIR).performScrollTo().performClick()
         assertEquals(1, repaired)
     }
 
@@ -181,10 +220,19 @@ class SettingsScreenTest {
         compose.onNodeWithText("只进通知栏").assertIsDisplayed()
         compose.onNodeWithText("已关闭").assertIsDisplayed()
         compose.onNodeWithText(StatusCopy.NOTIF_FOOTER).assertExists()
+        compose.onNodeWithText("实时任务通知").assertDoesNotExist()
         compose.onNodeWithText("需要你处理").performClick()
         compose.onNodeWithText("任务结果").performClick()
         compose.onNodeWithText("任务进度").performClick()
         assertEquals(listOf(Fix.OpenAttentionChannel, Fix.OpenResultChannel, Fix.OpenProgressChannel), fixes)
+    }
+
+    @Test
+    fun notificationsPageOpensLiveUpdatesOnAndroid16() {
+        val fixes = mutableListOf<Fix>()
+        compose.setContent { NotificationsScreen(ready.copy(sdkInt = 36), onFix = { fixes += it }, onBack = {}) }
+        compose.onNodeWithText("实时任务通知").performScrollTo().performClick()
+        assertEquals(listOf(Fix.OpenLiveTaskSettings), fixes)
     }
 
     /** 总开关关着:给「去打开」,三个频道都显示已关闭。 */
@@ -201,7 +249,7 @@ class SettingsScreenTest {
     fun unpairAsksFirst() {
         var unpaired = 0
         compose.setContent { PhoneOpsScreen(ready, "14", onProblem = {}, onRepair = {}, onUnpair = { unpaired++ }, onBack = {}) }
-        compose.onNodeWithText(PhoneSetupCopy.UNPAIR).performClick()
+        compose.onNodeWithText(PhoneSetupCopy.UNPAIR).performScrollTo().performClick()
         assertEquals(0, unpaired)
         compose.clickInDialog(PhoneSetupCopy.UNPAIR_CONFIRM)
         assertEquals(1, unpaired)
@@ -496,6 +544,123 @@ class SettingsScreenTest {
         compose.onNodeWithText(SandboxCopy.CLEAR_ALL_BODY).assertIsDisplayed()
         compose.onNodeWithText(SandboxCopy.CLEAR).performClick()
         assertEquals(1, all)
+    }
+
+    @Test
+    fun phoneOpsPageShowsShizukuStatusTransportChipsAndGuide() {
+        var statusState by mutableStateOf(
+            ready.copy(
+                shellTransport = ShellTransport.Auto,
+                shizuku = ShizukuPlatformState(installed = false, running = false, permissionGranted = false),
+                wirelessPaired = false,
+            ),
+        )
+        var selectedTransport: ShellTransport? = null
+        var grants = 0
+        var guides = 0
+        var refreshes = 0
+        compose.setContent {
+            PhoneOpsScreen(
+                status = statusState,
+                androidRelease = "14",
+                onProblem = {},
+                onRepair = {},
+                onUnpair = {},
+                onBack = {},
+                onSelectTransport = { selectedTransport = it; statusState = statusState.copy(shellTransport = it) },
+                onGrantShizuku = { grants++ },
+                onOpenShizukuGuide = { guides++ },
+                onRefreshShizuku = { refreshes++ },
+            )
+        }
+        compose.onNodeWithTag("phone-shizuku-status").assertExists()
+        compose.onNodeWithText("Not installed").assertExists()
+        compose.onNodeWithTag("phone-shizuku-guide").performScrollTo().performClick()
+        assertEquals(1, guides)
+
+        compose.onNodeWithTag("phone-transport-Shizuku").performScrollTo().performClick()
+        assertEquals(ShellTransport.Shizuku, selectedTransport)
+
+        statusState = statusState.copy(
+            shizuku = ShizukuPlatformState(installed = true, running = false, permissionGranted = false),
+        )
+        compose.onNodeWithText("Installed · Not running").assertExists()
+        compose.onNodeWithTag("phone-shizuku-guide").performScrollTo().assertExists()
+
+        statusState = statusState.copy(
+            shizuku = ShizukuPlatformState(installed = true, running = true, permissionGranted = false),
+        )
+        compose.onNodeWithText("Running · Permission needed").assertExists()
+        compose.onNodeWithTag("phone-shizuku-guide").assertDoesNotExist()
+        compose.onNodeWithTag("phone-shizuku-action").performScrollTo().performClick()
+        assertEquals(1, grants)
+
+        statusState = statusState.copy(
+            shizuku = ShizukuPlatformState(installed = true, running = true, permissionGranted = true),
+        )
+        compose.onNodeWithText("Running · Permission granted").assertExists()
+        assertTrue(refreshes >= 1)
+    }
+
+    /** 手机操作:术语副标题、修复连接的目录说明删掉,系统版本用版本号替代「满足」,危险后果说明保留。 */
+    @Test
+    fun phoneOpsOmitsRedundantSubtitles() {
+        compose.setContent { PhoneOpsScreen(ready, "14", onProblem = {}, onRepair = {}, onUnpair = {}, onBack = {}) }
+        compose.onAllNodesWithText("读取和操作", substring = true).assertCountEquals(0)
+        compose.onAllNodesWithText("换了手机设置", substring = true).assertCountEquals(0)
+        compose.onAllNodesWithText("满足").assertCountEquals(0)
+        compose.onNodeWithText("安卓 14").assertIsDisplayed()
+    }
+
+    /** Shizuku 就绪时诊断读盘隐藏,未就绪时仍出现。 */
+    @Test
+    fun phoneOpsShizukuReadyHidesDiagnostic() {
+        var status by mutableStateOf(ready.copy(shizuku = ShizukuPlatformState(installed = true, running = true, permissionGranted = true)))
+        compose.setContent { PhoneOpsScreen(status, "14", onProblem = {}, onRepair = {}, onUnpair = {}, onBack = {}) }
+        compose.onAllNodesWithText("已安装", substring = true).assertCountEquals(0)
+        status = status.copy(shizuku = ShizukuPlatformState(installed = false, running = false, permissionGranted = false))
+        compose.onAllNodesWithText("已安装", substring = true).assertCountEquals(1)
+    }
+
+    /** 任务运行:直白开关与费用说明的副标题删掉;4 个上限值仍显示(移到行尾)。 */
+    @Test
+    fun duringWorkOmitsRedundantSubtitles() {
+        compose.setContent {
+            DuringWorkScreen(true, {}, true, {}, parallel = null, onParallelMax = {}, onBack = {},
+                stepLimit = null, triggerRunMinutes = null, sandboxBudgetMinutes = 30, tokenBudget = null)
+        }
+        for (t in listOf("屏幕不熄灭", "不出声", "按人民币估算", "在小窗里点")) {
+            compose.onAllNodesWithText(t, substring = true).assertCountEquals(0)
+        }
+        // 4 个上限值仍显示:步数/定时/Token 是「不限制」,沙箱是「30 分钟」
+        compose.onAllNodesWithText("不限制").assertCountEquals(3)
+        compose.onNodeWithText("30 分钟").performScrollTo().assertIsDisplayed()
+    }
+
+    /** 通知:总开关与免打扰的复述说明删掉,频道触发时机保留。 */
+    @Test
+    fun notificationsOmitsRedundantSubtitles() {
+        compose.setContent { NotificationsScreen(ready, onFix = {}, onBack = {}) }
+        compose.onAllNodesWithText("允许 Mika 发通知").assertCountEquals(0)
+        compose.onAllNodesWithText("静默显示在通知栏", substring = true).assertCountEquals(0)
+        compose.onNodeWithText("需要你接管、确认、回答时").assertIsDisplayed()
+    }
+
+    /** 悬浮胶囊:两条滑杆说明删掉,三模式差异说明保留。 */
+    @Test
+    fun capsuleOmitsSliderDetails() {
+        compose.setContent { CapsuleScreen(CapsuleMode.DuringTasks, onMode = {}, onBack = {}) }
+        compose.onAllNodesWithText("几秒没碰后", substring = true).assertCountEquals(0)
+        compose.onAllNodesWithText("整体缩放", substring = true).assertCountEquals(0)
+        compose.onNodeWithText("有任务时显示").assertIsDisplayed()
+    }
+
+    /** 高级:网页搜索的目录说明删掉(行尾值仍显示)。 */
+    @Test
+    fun advancedOmitsWebSearchSubtitle() {
+        compose.setContent { AdvancedSettingsContent(onBack = {}, webSearch = WebSearchConfig(), onOpenWebSearch = {}) }
+        compose.onAllNodesWithText("可选搜索服务", substring = true).assertCountEquals(0)
+        compose.onNodeWithText("网页搜索").assertExists()
     }
 }
 

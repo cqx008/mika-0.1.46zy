@@ -12,6 +12,7 @@ data class SpeedFlags(
     val structuredCompaction: Boolean = false,
     /** 元素优先,只有读不清或模型主动请求时才给主模型画面。 */
     val adaptiveVision: Boolean = false,
+    /** 第一次读到新屏时把重复字段折成表格列;元素引用和完整树仍保留。 */
     val tablesAtBirth: Boolean = false,
     /** 场景提示词(购物/支付):开时给 commerce/payment 意图的任务拼对应场景段。 */
     val scenePrompts: Boolean = false,

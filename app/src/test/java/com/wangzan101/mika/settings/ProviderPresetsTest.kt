@@ -1,6 +1,7 @@
 package com.wangzan101.mika.settings
 
 import com.wangzan101.mika.i18n.ChineseTexts
+import com.wangzan101.mika.i18n.tr
 import com.wangzan101.mika.ui.AddForm
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
@@ -66,23 +67,25 @@ class ProviderPresetsTest {
         assertFalse(deepseek.capabilities.vision)
     }
 
-    /** 预置的思考档位只来自官方文档:DeepSeek 的 reasoning_effort 可能值是 none/low/high/max(none 关思考),别名不预置;
-     *  商汤免费档预设预置默认模型 sensenova-6.8-flash-lite(默认关思考,见 [ProviderPreset.noThinkingByDefault]),
-     *  主/看图/轻量三用途默认全填它(见 [ModelSetupViewModel])。 */
+    /** 预置的思考档位只来自官方文档:DeepSeek 的 reasoning_effort 可能值是 none/low/high/max(none 关思考),别名不预置。 */
     @Test fun reasoningLevelsAreCuratedAndOfficialOnly() {
         assertEquals(listOf("none", "low", "high", "max"), preset("DeepSeek").reasoningLevels)
-        // 商汤免费档预设:默认模型 + 默认关思考(免费档限流,默认不带思考参数)
-        val sn = preset("商汤（免费）")
-        assertEquals("sensenova-6.8-flash-lite", sn.defaultModel)
-        assertTrue(sn.noThinkingByDefault)
-        assertTrue(sn.capabilities.vision)
-        assertEquals(listOf("sensenova"), sn.familyTokens)
-        assertEquals("https://token.sensenova.cn/v1", sn.baseUrl)
-        // 没核实的店家一律不预置,界面上照旧不出档位;默认模型/默认关思考只预置已核实的(商汤免费档)
-        ProviderPresets.all.filter { it.label != "DeepSeek" && it.label != "商汤（免费）" }.forEach { p ->
+        // 没核实的店家一律不预置,界面上照旧不出档位(见 ReasoningOptions)
+        ProviderPresets.all.filter { it.label != "DeepSeek" }.forEach { p ->
             assertEquals(p.label, emptyList<String>(), p.reasoningLevels)
-            assertNull(p.label, p.defaultModel)
         }
+    }
+
+    @Test fun openDesignGoUsesTheCompatibleEndpointAndRequiresTheUsersKey() {
+        val go = preset("OpenDesign Go")
+        assertEquals(ProviderConfig.Kind.OpenAiCompat, go.kind)
+        assertEquals("https://amr-link.open-design.ai/v1", go.baseUrl)
+        assertTrue(go.familyTokens.isEmpty())
+        assertEquals(go, ProviderPresets.forHost("https://amr-link.open-design.ai/v1/models"))
+        val form = AddForm.of(go)
+        assertTrue(form.keyRequired)
+        assertFalse(form.canTest)
+        assertTrue(form.copy(apiKey = "test-key").canTest)
     }
 
     /** Coding Plan 的 Key 和标准 API 不通用;地址要落在官方分开的 OpenAI 兼容端点上。 */
@@ -94,12 +97,30 @@ class ProviderPresetsTest {
         assertNotEquals(standard.baseUrl, coding.baseUrl)
     }
 
-    /** 托管多家模型的 OpenAI 兼容网关:不给 familyTokens,地址认得出是它。 */
-    @Test fun requestyIsAnOpenAiCompatGateway() {
-        val requesty = preset("Requesty")
-        assertEquals("https://router.requesty.ai/v1", requesty.baseUrl)
-        assertEquals(ProviderConfig.Kind.OpenAiCompat, requesty.kind)
-        assertEquals(emptyList<String>(), requesty.familyTokens)
-        assertEquals("Requesty", ProviderPresets.forHost("https://router.requesty.ai/v1/")?.label)
+    /** Cloudflare Workers AI 预设要求用户替换 {account_id}，地址可编辑，且能按模板匹配实际端点。 */
+    @Test fun cloudflarePresetRequiresAccountIdAndHasEditableUrl() {
+        val cf = preset("Cloudflare Workers AI")
+        assertEquals(ProviderConfig.Kind.OpenAiCompat, cf.kind)
+        assertTrue(cf.capabilities.vision)
+        assertTrue(cf.familyTokens.contains("llama-3.3"))
+        assertTrue(cf.urlEditable)
+
+        val form = AddForm.of(cf)
+        assertTrue(cf.urlEditable)
+        assertTrue(form.isCloudflare)
+        assertFalse("Cloudflare 单独展示 Account ID 输入项，隐藏原始 URL 输入框", form.urlEditable)
+        assertTrue(form.keyRequired)
+        assertEquals(tr(com.wangzan101.mika.R.string.model_url_account_id), form.urlProblem)
+        assertFalse(form.canTest)
+
+        val filledForm = form.copy(
+            baseUrl = "https://api.cloudflare.com/client/v4/accounts/test_account_id_123/ai/v1",
+            apiKey = "test_key",
+        )
+        assertNull(filledForm.urlProblem)
+        assertTrue(filledForm.canTest)
+
+        assertEquals(cf, ProviderPresets.forBaseUrl("https://api.cloudflare.com/client/v4/accounts/test_account_id_123/ai/v1"))
+        assertEquals(cf, ProviderPresets.forHost("https://api.cloudflare.com/client/v4/accounts/test_account_id_123/ai/v1"))
     }
 }

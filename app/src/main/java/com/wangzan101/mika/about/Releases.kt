@@ -46,7 +46,6 @@ object Releases {
     /** 发布里的一个附件。检查更新走发布页兜底时,附件信息从网页里读出来,字段和 API 的一致。 */
     internal data class ReleaseAsset(val name: String, val url: String, val size: Long? = null, val digest: String? = null)
 
-    /** [deviceAbis] 是本机支持的 ABI,按偏好排序(Build.SUPPORTED_ABIS);为空时只取全架构包。 */
     /** 可配置后端的最新发布:ok、version、url、force、notes。自有实现:mika-api 更新检查。 */
     fun fromServer(text: String): ReleaseInfo {
         val o = json.parseToJsonElement(text).jsonObject
@@ -63,6 +62,7 @@ object Releases {
         )
     }
 
+    /** [deviceAbis] 是本机支持的 ABI,按偏好排序(Build.SUPPORTED_ABIS);为空时只取全架构包。 */
     fun fromGitHub(text: String, deviceAbis: List<String> = emptyList()): ReleaseInfo {
         val o = json.parseToJsonElement(text).jsonObject
         val tag = o.str("tag_name") ?: error("no tag_name")

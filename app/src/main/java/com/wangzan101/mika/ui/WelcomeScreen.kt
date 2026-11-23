@@ -64,11 +64,6 @@ fun WelcomeScreen(onStart: () -> Unit) {
                 GroupCard(Modifier.padding(top = 28.dp)) {
                     WelcomeCopy.FEATURES.forEachIndexed { i, f -> Feature(f.icon, f.title, f.body, first = i == 0) }
                 }
-                // 自有实现:mika 账号引导卡(欢迎页:点「注册/登录」进 Model 页再弹面板)
-                com.wangzan101.mika.ui.WelcomeMikaGuide(
-                    onOpenAccount = { onStart() },
-                    Modifier.padding(top = 16.dp),
-                )
             }
             Column(Modifier.fillMaxWidth().padding(start = 16.dp, end = 16.dp, top = 8.dp, bottom = 12.dp)) {
                 ProgressDots(Onboarding.DOTS, Onboarding.dot(OnboardingStep.Welcome), Modifier.padding(top = 4.dp))

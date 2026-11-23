@@ -9,7 +9,7 @@ import okhttp3.HttpUrl.Companion.toHttpUrlOrNull
  * 模型名和 Key 由用户填,能力也可以改。
  * [sessionHeader] 是服务商要求放对话会话号的请求头名(见 [com.wangzan101.mika.core.model.ModelSession]);不要的为 null。
  * [selfHosted] 是用户自己机器上跑的服务:[baseUrl] 只是本机的默认端口,表单里让用户改成那台机器的地址,Key 可以不填。
- * [familyTokens] 是这家自己的模型名里都有的词(小写):Key 下列出的还有别家的模型时,默认先试自有的(见 [ModelOptions.candidates]);
+ * [familyTokens] 是这家自己的模型名里都有的词(小写):Key 下列出的还有别家的模型时,默认先试自家的(见 [ModelOptions.candidates]);
  * 托管多家模型的、自己跑的不给。
  */
 data class ProviderPreset(
@@ -25,10 +25,8 @@ data class ProviderPreset(
      * 只填官方文档确认过的值,不猜;照服务商写明的顺序。
      */
     val reasoningLevels: List<String> = emptyList(),
-    /** 选这个预设时不用列模型、直接定主模型的模型名:用户只填 Key 就能用。 */
-    val defaultModel: String? = null,
-    /** 调用默认不带思考参数:服务商声明默认开思考的模型(如商汤免费档)加 true。 */
-    val noThinkingByDefault: Boolean = false,
+    /** 地址中含有需要用户替换的参数(如 {account_id})或服务商要求填入个性化端点:界面上允许编辑地址。 */
+    val urlEditable: Boolean = false,
 )
 
 object ProviderPresets {
@@ -36,7 +34,23 @@ object ProviderPresets {
         Capabilities(toolCalls = true, vision = vision, contextTokens = context, reasoning = false, promptCaching = caching)
 
     /** Base URL 对得上的模板(添加时选了别的模板、或测试里直接给地址时,按地址补上能力的初始值);没有为 null。 */
-    fun forBaseUrl(url: String): ProviderPreset? = all.firstOrNull { it.baseUrl.isNotEmpty() && url.trimEnd('/') == it.baseUrl.trimEnd('/') }
+    fun forBaseUrl(url: String): ProviderPreset? = all.firstOrNull { preset ->
+        preset.baseUrl.isNotEmpty() && (
+            url.trimEnd('/') == preset.baseUrl.trimEnd('/') ||
+            (preset.baseUrl.contains('{') && matchesTemplate(preset.baseUrl, url))
+        )
+    }
+
+    private fun matchesTemplate(template: String, url: String): Boolean {
+        val parts = template.split("{account_id}")
+        if (parts.size != 2) return false
+        val prefix = parts[0]
+        val suffix = parts[1].trimEnd('/')
+        val trimmed = url.trim().trimEnd('/')
+        if (!trimmed.startsWith(prefix) || !trimmed.endsWith(suffix)) return false
+        val middle = trimmed.substring(prefix.length, trimmed.length - suffix.length)
+        return middle.isNotEmpty() && !middle.contains('/')
+    }
 
     /**
      * 主机名和哪个服务商模板的地址一样(路径可以不同):自定义填了某家的官方地址时,建议改用那个模板。
@@ -63,11 +77,6 @@ object ProviderPresets {
         // Coding Plan 的 Key 和标准 API 分开；OpenAI Chat Completion 专用地址见智谱的 Coding Plan 接入指南。
         ProviderPreset("智谱 Coding Plan", ProviderConfig.Kind.OpenAiCompat, "https://open.bigmodel.cn/api/coding/paas/v4", caps(), familyTokens = listOf("glm")),
         // 托管多家开源模型,能不能看图按模型定
-        // 商汤 SenseNova 免费档(sensenova-6.8-flash-lite):apiBase/模型/思考全预配,用户只填 Key
-        ProviderPreset("商汤（免费）", ProviderConfig.Kind.OpenAiCompat, "https://token.sensenova.cn/v1", caps(vision = true),
-            familyTokens = listOf("sensenova"),
-            defaultModel = "sensenova-6.8-flash-lite",
-            noThinkingByDefault = true),
         ProviderPreset("硅基流动", ProviderConfig.Kind.OpenAiCompat, "https://api.siliconflow.cn/v1", caps()),
         // 豆包:模型名填模型 ID 或推理接入点 ID(ep-…);这家不一定提供列模型接口,列不出时手填
         ProviderPreset("火山方舟", ProviderConfig.Kind.OpenAiCompat, "https://ark.cn-beijing.volces.com/api/v3", caps(vision = true, context = 128_000), familyTokens = listOf("doubao")),
@@ -79,6 +88,7 @@ object ProviderPresets {
         // Key 是控制台生成的 bce-v3/… 那一串,照 Bearer 发
         ProviderPreset("百度千帆", ProviderConfig.Kind.OpenAiCompat, "https://qianfan.baidubce.com/v2", caps(), familyTokens = listOf("ernie")),
         ProviderPreset("OpenRouter", ProviderConfig.Kind.OpenAiCompat, "https://openrouter.ai/api/v1", caps()),
+        ProviderPreset("OpenDesign Go", ProviderConfig.Kind.OpenAiCompat, "https://amr-link.open-design.ai/v1", caps()),
         // 订阅制,一个 Key 用多家模型;各模型走哪种协议、哪个地址由模型列表逐个写明,这里的接口类型只是没写明时的退路。
         // 每个请求都要带对话的会话号,不带就拒绝(HTTP 400)
         ProviderPreset("OpenCode Go", ProviderConfig.Kind.OpenAiCompat, "https://opencode.ai/zen/go/v1", caps(), sessionHeader = "x-opencode-session"),
@@ -90,6 +100,8 @@ object ProviderPresets {
         // 列模型接口写明每个模型能不能调用工具、看图和上下文长度
         ProviderPreset("Mistral", ProviderConfig.Kind.OpenAiCompat, "https://api.mistral.ai/v1", caps(vision = true, context = 128_000), familyTokens = listOf("mistral")),
         ProviderPreset("Groq", ProviderConfig.Kind.OpenAiCompat, "https://api.groq.com/openai/v1", caps(context = 128_000)),
+        // Cloudflare Workers AI: OpenAI 兼容端点,地址中的 {account_id} 需替换为用户的 Cloudflare 账户 ID
+        ProviderPreset("Cloudflare Workers AI", ProviderConfig.Kind.OpenAiCompat, "https://api.cloudflare.com/client/v4/accounts/{account_id}/ai/v1", caps(vision = true, context = 128_000), familyTokens = listOf("llama-3.3", "gpt-oss", "llama-4", "llama", "gemma", "mistral"), urlEditable = true),
         // 自己机器上跑的:地址是本机的默认端口,跑在电脑上时改成电脑的局域网地址;不要 Key
         ProviderPreset("Ollama", ProviderConfig.Kind.OpenAiCompat, "http://127.0.0.1:11434/v1", caps(), selfHosted = true),
         ProviderPreset("LM Studio", ProviderConfig.Kind.OpenAiCompat, "http://127.0.0.1:1234/v1", caps(), selfHosted = true),

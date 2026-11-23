@@ -39,6 +39,19 @@ class RunTimelineViewModelTest {
 
     private fun ready(runId: String) = RunTimelineViewModel(store, runId).load() as TimelineUi.Ready
 
+    @Test fun recordedGoalsKeepTheirConfirmationsAfterTheTaskEnds() {
+        val criteria = listOf("确认地址", "确认店名", "给出推荐")
+        val id = run("找咖啡馆") {
+            event(RunEvent.Criteria(clock, criteria, emptyList(), confirmedIds = setOf(1)))
+            event(RunEvent.Criteria(clock, criteria, emptyList(), complete = true, confirmedIds = setOf(1, 2, 3)))
+            event(RunEvent.TaskEnded(clock, "succeeded", "推荐拿铁"))
+        }
+        assertEquals(criteria, ready(id).header.criteria)
+        assertEquals(setOf(1, 2, 3), ready(id).header.confirmedIds)
+        val old = run("旧任务") { event(RunEvent.Criteria(clock, criteria, emptyList())) }
+        assertNull(ready(old).header.confirmedIds)
+    }
+
     /** 任务还在跑、还没有结束事件时算「进行中」:页面据此每秒重读,跑完就停。 */
     @Test fun anUnfinishedRunOfALiveTaskReadsAsRunning() {
         val h = store.open("打开设置")
@@ -151,7 +164,7 @@ class RunTimelineViewModelTest {
         val ui = ready(id)
         assertEquals(listOf(1, 2, 3, 4), ui.steps.map { it.step })
         val (launch, look, tap, stale) = ui.steps
-        assertEquals("先".repeat(80) + "…", launch.said)
+        assertEquals(long, launch.said)
         assertEquals("打开 App", launch.tool)
         assertEquals("com.android.settings", launch.detail)
         assertEquals("生效", launch.result)
@@ -235,6 +248,20 @@ class RunTimelineViewModelTest {
         assertEquals(3, rows[0].count)
         assertEquals(listOf(1, 2, 3), rows[0].obsIds)
         assertEquals(listOf("act", "act"), rows.drop(1).map { it.kind })
+    }
+
+    /** 外部 MCP 连接器调用的活动单独成行,标的是连接器配置的名字;普通的读照旧合并。 */
+    @Test fun mcpCallShowsTheConnectorName() {
+        val id = run("查笔记") {
+            event(RunEvent.ModelReply(clock, 1, "", "mcp_demo__search", "{}", 10, 1, null))
+            event(RunEvent.Activity(clock, 1, "observe", "web_read_page", "example.com", "completed", listOf(1), callId = "r1"))
+            event(RunEvent.Activity(clock, 1, "act", "mcp_demo__search", null, "completed", callId = "m1", mcpConnector = "Team notes"))
+        }
+        val rows = ready(id).steps.single().activities
+        assertEquals(2, rows.size)
+        assertEquals("observe", rows[0].kind)
+        assertEquals("mcp", rows[1].kind)
+        assertEquals("已调用 Team notes MCP", rows[1].label)
     }
 
     @Test fun showsVerifierAndGuardTags() {

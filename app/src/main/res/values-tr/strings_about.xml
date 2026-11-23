@@ -40,7 +40,6 @@
     <string name="about_update_download_in_app">Güncellemeyi indir</string>
     <string name="about_update_downloading">İndiriliyor…</string>
     <string name="about_update_progress">%1$d%% indiriliyor</string>
-    <string name="about_update_paused">İndirme duraklatıldı; otomatik devam edecek…</string>
     <string name="about_update_install">Güncellemeyi yükle</string>
     <string name="about_update_retry">Tekrar indir</string>
     <string name="about_update_cancel">İndirmeyi sil</string>
@@ -106,5 +105,4 @@
     <string name="about_mirrors_testing">Test ediliyor…</string>
     <string name="about_mirrors_test_ok">Güncelleme denetimleri için çalışıyor.</string>
     <string name="about_mirrors_test_fail">Güncelleme denetimleri bu yansıyı kullanamıyor. İndirmeler yine de çalışabilir.</string>
-    <string name="about_mirrors_count" translatable="false">%1$d</string>
 </resources>

@@ -24,11 +24,8 @@ import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
-import androidx.compose.foundation.layout.RowScope
 import androidx.compose.foundation.layout.aspectRatio
-import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.offset
@@ -36,9 +33,6 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
-import androidx.compose.foundation.lazy.grid.GridCells
-import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
-import androidx.compose.foundation.lazy.grid.items
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -58,7 +52,6 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
@@ -69,16 +62,12 @@ import androidx.compose.ui.semantics.selected
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontWeight
-import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
-import androidx.compose.ui.unit.sp
 import androidx.core.app.ActivityCompat
 import androidx.lifecycle.compose.LifecycleResumeEffect
-import com.wangzan101.mika.ui.components.ButtonKind
-import com.wangzan101.mika.ui.components.ButtonSize
-import com.wangzan101.mika.ui.components.MikaButton
+import com.wangzan101.mika.core.chat.GeneratedPhoto
 import com.wangzan101.mika.ui.components.cardSurface
 import com.wangzan101.mika.ui.theme.MikaColors
 import com.wangzan101.mika.ui.theme.MikaIcons
@@ -91,7 +80,6 @@ import kotlinx.coroutines.launch
 /** 对话页附件的说法。 */
 object AttachCopy {
     val ADD: String get() = tr(R.string.attach_add)
-    val CLOSE: String get() = tr(R.string.attach_close)
     val CAMERA: String get() = tr(R.string.attach_camera)
     val ALBUM: String get() = tr(R.string.attach_album)
     val FILES: String get() = tr(R.string.attach_files)
@@ -112,20 +100,30 @@ object AttachCopy {
     fun overLimit(n: Int) = tr(R.string.attach_over_limit, AttachTray.LIMIT, n)
 }
 
-// ---------- 面板 ----------
+// ---------- ＋ 里要系统界面的活 ----------
 
 /**
- * 「＋」点开的面板里那一份活:系统相机、照片选择器、文件选择器,照片权限(第一次打开时问一次),最近的照片。
- * 选中的交给 [onPicked](内容地址)或 [onToggle](最近的照片点一下,满了返回 false)。
+ * 「＋」面板里要系统界面或照片的那几件活:相机、相册、文件、照片权限(第一次打开时问一次)和最近的照片。
+ * 挑完、拍完的结果交给 [onPicked];最近的照片点一下交给 [onToggle],满了(返回 false)时 [onFull]。
  */
+internal class AttachLaunchers(
+    val camera: () -> Unit,
+    val album: () -> Unit,
+    val files: () -> Unit,
+    val deviceFiles: (() -> Unit)?,
+    val access: PhotoAccess,
+    val recent: List<PendingAttachment>?,
+    val grant: () -> Unit,
+    val toggle: (PendingAttachment) -> Unit,
+)
+
 @Composable
-internal fun AttachPanelHost(
-    selected: List<PendingAttachment>,
+internal fun rememberAttachLaunchers(
     onPicked: (List<String>) -> Unit,
     onToggle: (PendingAttachment) -> Boolean,
+    onFull: () -> Unit,
     onDeviceFiles: (() -> Unit)? = null,
-    modifier: Modifier = Modifier,
-) {
+): AttachLaunchers {
     val context = LocalContext.current
     var access by remember { mutableStateOf(RecentPhotos.access(context)) }
     var refresh by remember { mutableIntStateOf(0) }
@@ -182,19 +180,17 @@ internal fun AttachPanelHost(
         onPicked(uris.map { it.toString() })
     }
     val openAlbum = { album.launch(PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly)) }
-    AttachPanel(
-        access = access,
-        recent = recent,
-        selected = selected,
-        onCamera = {
+    return AttachLaunchers(
+        camera = {
             if (ContextCompat.checkSelfPermission(context, Manifest.permission.CAMERA) == PackageManager.PERMISSION_GRANTED) startCamera()
             else cameraPermission.launch(Manifest.permission.CAMERA)
         },
-        onAlbum = openAlbum,
-        onFiles = { files.launch(arrayOf("*/*")) },
-        onDeviceFiles = onDeviceFiles,
-        onToggle = { if (!onToggle(it)) Toast.makeText(context, AttachCopy.FULL, Toast.LENGTH_SHORT).show() },
-        onGrant = {
+        album = openAlbum,
+        files = { files.launch(arrayOf("*/*")) },
+        deviceFiles = onDeviceFiles,
+        access = access,
+        recent = recent,
+        grant = {
             val activity = context.findActivity()
             val blocked = access == PhotoAccess.None && RecentPhotos.asked(context) && activity != null &&
                 RecentPhotos.permissions().none { ActivityCompat.shouldShowRequestPermissionRationale(activity, it) }
@@ -203,97 +199,13 @@ internal fun AttachPanelHost(
             if (blocked) context.startActivity(Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS, Uri.fromParts("package", context.packageName, null)))
             else permissions.launch(RecentPhotos.permissions())
         },
-        modifier = modifier,
-    )
-}
-
-/**
- * 面板:上面一排相机 / 相册 / 文件,下面四列最近的照片(点一下选上,右上角是序号;再点取消)。
- * 没给照片权限时下面是一句说明和「允许访问照片」;只给了部分照片时列出给了的那些,旁边能改范围。[recent] 为 null 时还在读。
- */
-@Composable
-internal fun AttachPanel(
-    access: PhotoAccess,
-    recent: List<PendingAttachment>?,
-    selected: List<PendingAttachment>,
-    onCamera: () -> Unit,
-    onAlbum: () -> Unit,
-    onFiles: () -> Unit,
-    onToggle: (PendingAttachment) -> Unit,
-    onGrant: () -> Unit,
-    modifier: Modifier = Modifier,
-    onDeviceFiles: (() -> Unit)? = null,
-) {
-    val c = MikaTheme.colors
-    Column(modifier.fillMaxSize().testTag("attach-panel").padding(start = 12.dp, end = 12.dp, top = 12.dp, bottom = 8.dp)) {
-        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-            Tile(MikaIcons.PhotoCamera, AttachCopy.CAMERA, onCamera)
-            Tile(MikaIcons.Photo, AttachCopy.ALBUM, onAlbum)
-            Tile(MikaIcons.Paperclip, AttachCopy.FILES, onFiles)
-            if (onDeviceFiles != null) Tile(MikaIcons.Folder, stringResource(R.string.device_browser_title), onDeviceFiles)
-        }
-        if (access == PhotoAccess.None) {
-            Column(
-                Modifier.weight(1f).fillMaxWidth().padding(horizontal = 20.dp),
-                horizontalAlignment = Alignment.CenterHorizontally,
-                verticalArrangement = Arrangement.spacedBy(10.dp, Alignment.CenterVertically),
-            ) {
-                Text(AttachCopy.NEED_ACCESS, style = PanelText, color = c.ink2, textAlign = TextAlign.Center)
-                MikaButton(AttachCopy.GRANT, onGrant, kind = ButtonKind.Primary, size = ButtonSize.Medium)
-                Text(AttachCopy.GRANT_HINT, style = MikaType.Hint, color = c.ink3, textAlign = TextAlign.Center)
-            }
-            return@Column
-        }
-        Row(Modifier.fillMaxWidth().padding(start = 2.dp, end = 2.dp, top = 14.dp, bottom = 8.dp), verticalAlignment = Alignment.CenterVertically) {
-            Text(
-                if (access == PhotoAccess.Partial) AttachCopy.RECENT_PARTIAL else AttachCopy.RECENT,
-                Modifier.weight(1f), style = MikaType.Hint, color = c.ink3, maxLines = 1, overflow = TextOverflow.Ellipsis,
-            )
-            if (access == PhotoAccess.Partial) PanelLink(AttachCopy.CHANGE, onGrant)
-            PanelLink(AttachCopy.ALL, onAlbum)
-        }
-        when {
-            recent == null -> Box(Modifier.weight(1f))
-            recent.isEmpty() -> Box(Modifier.weight(1f).fillMaxWidth(), contentAlignment = Alignment.Center) {
-                Text(AttachCopy.NO_PHOTOS, style = PanelText, color = c.ink3)
-            }
-            else -> LazyVerticalGrid(
-                GridCells.Fixed(4),
-                Modifier.weight(1f).fillMaxWidth().clip(GridShape),
-                horizontalArrangement = Arrangement.spacedBy(4.dp),
-                verticalArrangement = Arrangement.spacedBy(4.dp),
-                contentPadding = PaddingValues(bottom = 4.dp),
-            ) {
-                items(recent, key = { it.uri }) { p -> RecentCell(p, AttachTray.order(selected, p.uri)) { onToggle(p) } }
-            }
-        }
-    }
-}
-
-@Composable
-private fun RowScope.Tile(icon: ImageVector, label: String, onClick: () -> Unit) {
-    val c = MikaTheme.colors
-    Column(
-        Modifier.weight(1f).height(76.dp).cardSurface(c, TileShape).clip(TileShape).clickable(role = Role.Button, onClick = onClick),
-        horizontalAlignment = Alignment.CenterHorizontally,
-        verticalArrangement = Arrangement.spacedBy(6.dp, Alignment.CenterVertically),
-    ) {
-        Icon(icon, null, Modifier.size(24.dp), tint = c.ink)
-        Text(label, style = TileText, color = c.ink)
-    }
-}
-
-@Composable
-private fun PanelLink(text: String, onClick: () -> Unit) {
-    Text(
-        text, Modifier.clip(MikaShapes.Tile).clickable(role = Role.Button, onClick = onClick).padding(horizontal = 6.dp, vertical = 4.dp),
-        style = LinkText, color = MikaTheme.colors.accent,
+        toggle = { if (!onToggle(it)) onFull() },
     )
 }
 
 /** 最近的一张照片:方块缩略图;选中时蓝框、淡蓝罩、右上角蓝底序号,没选时右上角一个空心圈。 */
 @Composable
-private fun RecentCell(photo: PendingAttachment, order: Int?, onClick: () -> Unit) {
+internal fun RecentCell(photo: PendingAttachment, order: Int?, onClick: () -> Unit) {
     val c = MikaTheme.colors
     val thumb = rememberAttachImage(AttachImage.Picked(photo.uri), RECENT_PX)
     Box(
@@ -400,6 +312,19 @@ internal fun SentAttachments(parsed: AttachmentMessage.Parsed, conversationId: S
     }
 }
 
+/** 回答里模型产出的 `/workspace/...` 引用:照片排格子、文件画卡片,和回答一起左对齐。 */
+@Composable
+internal fun OutputRefs(answer: String, conversationId: String?, onOpen: (AttachmentMessage.Item) -> Unit) {
+    val parsed = remember(answer) { outputRefsParsed(answer) }
+    if (!parsed.hasAttachments) return
+    Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+        if (parsed.photos.isNotEmpty()) SentPhotos(parsed.photos, conversationId, OutputRefMaxWidth, onOpen)
+        for (f in parsed.files) SentFileCard(f, OutputRefMaxWidth) { onOpen(f) }
+    }
+}
+
+private val OutputRefMaxWidth = 320.dp
+
 @Composable
 private fun SentPhotos(photos: List<AttachmentMessage.Item>, conversationId: String?, maxWidth: Dp, onOpen: (AttachmentMessage.Item) -> Unit) {
     val c = MikaTheme.colors
@@ -436,9 +361,45 @@ private fun SentPhotos(photos: List<AttachmentMessage.Item>, conversationId: Str
     }
 }
 
+/**
+ * Mika 生成的照片:和用户附件一样的格子(1 张一大张,2 张并排,3 张起三列),点开在 App 的查看页看。
+ * 路径来自工具结果,不解析回答文字;conversationId 为 null(旧记录没有对话)时不解码。
+ */
 @Composable
-private fun SentFileCard(f: AttachmentMessage.Item, maxWidth: Dp, onClick: () -> Unit) {
+internal fun GeneratedPhotos(photos: List<GeneratedPhoto>, conversationId: String?, maxWidth: Dp) {
+    if (conversationId == null || photos.isEmpty()) return
+    val context = LocalContext.current
+    val scope = rememberCoroutineScope()
     val c = MikaTheme.colors
+    val cols = PhotoGrid.columns(photos.size)
+    val gap = 4.dp
+    val cell = minOf(if (cols == 1) SingleWidth else if (cols == 2) 118.dp else 96.dp, maxWidth)
+    val px = with(LocalDensity.current) { cell.roundToPx() }.coerceAtLeast(64)
+    Column(Modifier.fillMaxWidth().padding(bottom = 10.dp), verticalArrangement = Arrangement.spacedBy(gap)) {
+        photos.chunked(cols).forEach { row ->
+            Row(horizontalArrangement = Arrangement.spacedBy(gap)) {
+                row.forEach { p ->
+                    val thumb = rememberAttachImage(AttachImage.Sent(conversationId, p.path), px)
+                    Box(
+                        Modifier.testTag("generated-photo").size(cell).clip(GridPhotoShape).background(c.fill)
+                            .clickable(role = Role.Image, onClickLabel = stringResource(R.string.attach_view_large)) {
+                                scope.launch {
+                                    if (!AttachFiles.openSent(context, conversationId, p.path)) {
+                                        Toast.makeText(context, AttachCopy.GONE, Toast.LENGTH_SHORT).show()
+                                    }
+                                }
+                            },
+                    ) {
+                        thumb?.let { Image(it, p.path.substringAfterLast('/'), Modifier.matchParentSize(), contentScale = ContentScale.Crop) }
+                    }
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun SentFileCard(f: AttachmentMessage.Item, maxWidth: Dp, onClick: () -> Unit) {    val c = MikaTheme.colors
     Row(
         Modifier.testTag("sent-file").widthIn(min = minOf(220.dp, maxWidth), max = maxWidth).cardSurface(c, FileCardShape).clip(FileCardShape)
             .clickable(onClickLabel = stringResource(R.string.chat_open), role = Role.Button, onClick = onClick)
@@ -478,15 +439,10 @@ private const val SINGLE_PX = 640
 
 private val SingleWidth = 200.dp
 private val NeutralBadge = Color(0xFF8E8E93)
-private val TileShape = MikaShapes.Card
-private val GridShape = MikaShapes.Chip
 private val CellShape = RoundedCornerShape(MikaRadius.BubbleTail)
 private val ChipShape = MikaShapes.Chip
 private val GridPhotoShape = MikaShapes.Button
 private val FileCardShape = MikaShapes.Button
-private val PanelText = MikaType.Caption
-private val TileText = MikaType.Hint
-private val LinkText = MikaType.Hint
 private val BadgeText = MikaType.Hint.copy(fontWeight = FontWeight.SemiBold)
 private val BadgeSmall = MikaType.Micro.copy(fontWeight = FontWeight.Bold)
 private val BadgeLarge = MikaType.Micro.copy(fontWeight = FontWeight.Bold)

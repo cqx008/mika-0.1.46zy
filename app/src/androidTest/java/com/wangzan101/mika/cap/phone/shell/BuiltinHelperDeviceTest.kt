@@ -10,6 +10,7 @@ import androidx.test.platform.app.InstrumentationRegistry
 import com.wangzan101.mika.core.shell.BuiltinShellStatus
 import com.wangzan101.mika.cap.phone.PhoneServices
 import com.wangzan101.mika.cap.phone.setup.BuiltinShellManager
+import com.wangzan101.mika.cap.sandbox.WorkspaceKey
 import kotlinx.coroutines.flow.filterNotNull
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.runBlocking
@@ -74,7 +75,9 @@ class BuiltinHelperDeviceTest {
             android.os.ParcelFileDescriptor.AutoCloseInputStream(automation.executeShellCommand(cmd)).use { it.readBytes() }
         }
         try {
-            command("mkdir -p $dir/subdir; printf bridge > $dir/sample.txt")
+            // executeShellCommand 不经过 sh，不能直接用 ';' 和 '>'；借助 ${IFS} 在 sh -c 单参数里分隔。
+            command("mkdir -p $dir/subdir")
+            command("sh -c printf\${IFS}bridge>$dir/sample.txt")
             hintStore.save(com.wangzan101.mika.settings.DeviceDirectory(dir, "Test", "Files", "user"))
             assertTrue(testHub.syncDeviceFiles())
             assertEquals("denied", shell.listFiles(dir, null, 128).getString("status"))
@@ -111,7 +114,8 @@ class BuiltinHelperDeviceTest {
                 val copied = runBlocking { deviceFiles.importFile("$dir/sample.txt", workspaceId) }
                 assertEquals("/workspace/inbox/sample.txt", copied.path)
                 assertEquals(6L, copied.size)
-                dirs.gate.openRead(dirs.workspace(workspaceId), "inbox/sample.txt").use {
+                val key = WorkspaceKey.Conversation(workspaceId)
+                dirs.gate.openRead(dirs.workspace(key), "inbox/sample.txt").use {
                     assertEquals("bridge", it.input().readBytes().toString(Charsets.UTF_8))
                 }
                 val record = com.wangzan101.mika.task.DeviceImportStore(importPrefs).list(workspaceId).single()
@@ -119,26 +123,28 @@ class BuiltinHelperDeviceTest {
                 assertEquals(copied.path, record.workspacePath)
                 assertEquals(copied, runBlocking { deviceFiles.importFile("$dir/sample.txt", workspaceId) })
                 assertEquals(record.id, store.list(workspaceId).single().id)
-                java.io.File(dirs.workspace(workspaceId), "inbox/sample.txt").delete()
+                java.io.File(dirs.workspace(key), "inbox/sample.txt").delete()
                 val replacement = runBlocking { deviceFiles.importFile("$dir/sample.txt", workspaceId) }
                 assertEquals(copied.path, replacement.path)
                 assertEquals(2, store.list(workspaceId).size)
                 importPrefs.edit().clear().commit()
             } finally {
-                runBlocking { dirs.deleteWorkspace(workspaceId) }
+                runBlocking { dirs.deleteWorkspace(WorkspaceKey.Conversation(workspaceId)) }
             }
             assertEquals("not_file", shell.openFile(dir).getString("status"))
             assertEquals("denied", shell.openFile("/dev/null").getString("status"))
             assertEquals("denied", shell.openFile("/data/data/file").getString("status"))
             assertEquals("not_found", shell.openFile("$dir/missing").getString("status"))
-            assertEquals("denied", shell.listFiles("$dir/sample.txt", null, 128).getString("status"))
+            assertEquals("not_directory", shell.listFiles("$dir/sample.txt", null, 128).getString("status"))
             assertEquals("invalid", shell.listFiles("relative", null, 128).getString("status"))
             val first = shell.listFiles(dir, null, 1)
             assertEquals(listOf("sample.txt"), first.getStringArrayList("names"))
             val second = shell.listFiles(dir, first.getString("next"), 1)
             assertEquals(listOf("subdir"), second.getStringArrayList("names"))
             assertNull(second.getString("next"))
-            command("printf nested > $dir/subdir/Report.PDF; ln -s /data/local/tmp $dir/escape; ln -s $dir/subdir $dir/alias")
+            command("sh -c printf\${IFS}nested>$dir/subdir/Report.PDF")
+            command("ln -s /data/local/tmp $dir/escape")
+            command("ln -s $dir/subdir $dir/alias")
             if (shell.listFiles(dir, null, 128).getStringArrayList("names")!!.contains("alias")) {
                 val invalidPolicy = shell.setDeviceFilePolicy(1, "test-link", 1, arrayOf("$dir/alias"), booleanArrayOf(true))
                 assertEquals("invalid", invalidPolicy.getString("status"))
