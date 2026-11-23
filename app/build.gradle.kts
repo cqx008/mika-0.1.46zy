@@ -26,6 +26,10 @@ android {
         // 可配置后端的基础 URL:账号/反馈/更新都挂在它下面。
         // 默认空串(未配置),自建时在 gradle.properties 注入 MIKA_BACKEND_BASE=https://your-backend
         buildConfigField("String", "MIKA_BACKEND_BASE", "\"${providers.gradleProperty("MIKA_BACKEND_BASE").getOrElse("")}\"")
+        // 编译期校验:没注入 MIKA_BACKEND_BASE 时端点为空,update/账号/反馈全断 — 打印 WARN(不 fail,开源仓库允许走 GitHub 兜底;自建务必注入)
+        if (providers.gradleProperty("MIKA_BACKEND_BASE").getOrElse("").isEmpty()) {
+            println("WARN: MIKA_BACKEND_BASE 未注入 — 本包 update/账号/反馈将走 GitHub 兜底,自建请注入后端")
+        }
         // 关于页版本号后的 Beta 标记;出正式版时改成 false
         buildConfigField("boolean", "BETA", "true")
         buildConfigField("boolean", "ADB_LOGS", "false")
