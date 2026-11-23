@@ -143,6 +143,7 @@ fun ModelSetupScreen(
                 SystemSpeech.capability(context.applicationContext, silent)
             },
             voiceAccounts = voiceAccounts,
+            mikaContextArg = context.applicationContext,
         )
     }
     val ui by vm.state.collectAsState()
@@ -165,11 +166,14 @@ fun ModelSetupScreen(
     var showProviders by rememberSaveable { mutableStateOf(false) }
     // 账号登录的面板:在添加表单和服务商详情里都能打开,登录中关掉也不打断登录
     var signInSheet by rememberSaveable { mutableStateOf<SignInKind?>(null) }
+    // 自有实现:mika 自有账号的注册/登录面板(模型页/欢迎页同一个 MikaAccountPanelSheet)
+    var mikaSheet by rememberSaveable { mutableStateOf(false) }
 
     // 用账号登录成功:收起面板,打开这一家的详情(看账号和模型、设主模型)
     LaunchedEffect(ui.signedInProvider) {
         val id = ui.signedInProvider ?: return@LaunchedEffect
         signInSheet = null
+        mikaSheet = false
         if (picking == null && pickingFallbackSlot == null) {
             openProvider = id
             allModels = false
@@ -205,6 +209,7 @@ fun ModelSetupScreen(
         openVoice = onOpenVoice, openUsage = onOpenUsage,
         openVoiceCatalog = onOpenVoiceCatalog, openCallMode = onOpenCallMode,
         openDecision = { openDecision = true }, openSignIn = { signInSheet = it },
+        openMikaAccount = { mikaSheet = true },
         setReasoningEffort = vm::setReasoningEffort, setModelContext = vm::setModelContext,
     )
     // 内部子页:标识稳定(换数据不重演动画)、带着层级(决定滑动方向)
@@ -385,6 +390,24 @@ fun ModelSetupScreen(
             ),
         )
     }
+
+    // 自有实现:mika 账号面板(和设置页账号页同一个登录/注册面板;引导卡默认进注册页)。
+    // 登录/注册成功或退出登录后(mikaSession 变了)自动收起面板。
+    if (mikaSheet) {
+        val mikaPanelActions = remember(vm) { MikaAccountPanelActions(
+            login = { email, pwd -> vm.mikaLogin(email, pwd) },
+            register = { email, pwd, nick, avatar -> vm.mikaRegister(email, pwd, nick, avatar) },
+            dismiss = { mikaSheet = false },
+            openSensenova = { openSensenovaRegister(context) },
+        ) }
+        MikaAccountPanelSheet(ui, initialTab = true, mikaPanelActions, onOpenSensenova = { openSensenovaRegister(context) },
+            justRegistered = ui.mikaJustRegistered)
+        LaunchedEffect(Unit) {
+            vm.state.collect { s ->
+                if (s.mikaSession != null || s.accountSignIn.running) mikaSheet = false
+            }
+        }
+    }
 }
 
 /**
@@ -445,6 +468,8 @@ class ModelSetupActions(
     val next: () -> Unit = {},
     /** 打开一家账号登录的说明面板。 */
     val openSignIn: (SignInKind) -> Unit = {},
+    /** 自有实现:打开 mika 自有账号的注册/登录面板(商汤预设引导入口,默认注册页)。 */
+    val openMikaAccount: () -> Unit = {},
     /** 打开模型组管理页;上手流程不显示入口。 */
     val openGroups: () -> Unit = {},
     val setReasoningEffort: (ModelRole, String?) -> Unit = { _, _ -> },
@@ -473,6 +498,11 @@ fun ModelSetupContent(
         Column(Modifier.fillMaxSize().windowInsetsPadding(WindowInsets.navigationBars).windowInsetsPadding(WindowInsets.ime)) {
             TopBar(if (onboarding) ModelSetupCopy.TITLE else ModelsCopy.TITLE, MikaIcons.Back, onBack, stringResource(R.string.back))
             Column(Modifier.weight(1f).verticalScroll(scrollState).padding(horizontal = 16.dp)) {
+                // 自有实现:未登录 mika 账号时顶部的醒目引导(点「注册/登录」进账号面板),已登录换成「已登录」只读卡
+                ModelSetupMikaGuide(
+                    onOpenAccount = { actions.openMikaAccount() },
+                    Modifier.padding(top = 4.dp, bottom = 12.dp),
+                )
                 if (onboarding) {
                     Text(
                         ModelSetupCopy.LEAD, Modifier.padding(top = 4.dp, bottom = 12.dp),

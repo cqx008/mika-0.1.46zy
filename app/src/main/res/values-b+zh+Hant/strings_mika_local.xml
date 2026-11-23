@@ -1,0 +1,18 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- 自有特性繁體中文資源 -->
+<resources>
+<string name="about_wechat_sub">微信：長按右邊 ID 複製</string>
+<string name="settings_account">帳號</string>
+<string name="settings_account_sub">mika 帳號、暱稱、頭像與退出登入</string>
+<string name="settings_account_not_logged_in">未登入</string>
+<string name="settings_account_signed_in">已登入</string>
+<string name="settings_account_sign_in">登入 / 註冊</string>
+<string name="settings_account_profile">資料</string>
+<string name="settings_account_profile_none">未設定</string>
+<string name="settings_account_avatar_selected">頭像：%1$s</string>
+<string name="settings_account_sign_out_note">會退出 mika 帳號，並清掉這台手機上的商湯預設</string>
+<string name="settings_account_sign_out_title">退出登入？</string>
+<string name="settings_account_sign_out_body">會清掉這台手機上的 mika 帳號和商湯預設，隨時可以重新註冊或登入。</string>
+<string name="settings_feedback">反饋與建議</string>
+<string name="settings_feedback_sub">提建議、報錯或複製診斷資訊</string>
+</resources>

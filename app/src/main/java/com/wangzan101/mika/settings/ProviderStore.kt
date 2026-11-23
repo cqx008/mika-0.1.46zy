@@ -864,6 +864,20 @@ class ProviderStore(
         return true
     }
 
+    /**
+     * 按预设的默认行为设一个用途的思考档位,不走 [setReasoningEffort] 的档位白名单:
+     * 预设写明默认不发思考字段的(如商汤免费档,预设的 reasoningLevels 没列 none),
+     * 存服务商时直接把档位设成「关思考」(请求里不拼思考字段)。用户之后在界面上显式选档仍会照发,能力保留。
+     */
+    @Synchronized
+    fun setReasoningEffortAfterSave(role: ModelRole, effort: String?): Boolean {
+        if (_roles.value[role] !is RoleChoice.Model) return false
+        _roles.value = _roles.value.copy(reasoningEfforts =
+            if (effort == null) _roles.value.reasoningEfforts - role else _roles.value.reasoningEfforts + (role to effort))
+        writeConfig()
+        return true
+    }
+
     @Synchronized
     fun setModelContext(configId: String, settings: ModelContextSettings): Boolean {
         val cfg = _configs.value.firstOrNull { it.id == configId } ?: return false
@@ -1434,6 +1448,33 @@ class ProviderStore(
     }
 
     // ---------- 用 OpenRouter 账号登录 ----------
+
+    /** 自有账号(商汤预设服务商)的 mika 标记,供 UI 层识别。 */
+    private val MIKA_SIGN_IN = "mika-self"
+
+    /**
+     * 自有账号登录后连上商汤免费预设:建/找服务商,可选把 Key 存上。
+     * 没有 key 时只建服务商(用户填 key 时再存),三用途默认填预设的写死模型。
+     */
+    @Synchronized
+    fun connectMika(apiKey: String?, baseUrl: String, model: String, models: List<ListedModel>): Provider =
+        connect("Mika", ProviderConfig.Kind.OpenAiCompat, baseUrl, apiKey, models.ifEmpty { listOf(ListedModel(model, model)) },
+            signIn = MIKA_SIGN_IN)
+
+    /** 商汤预设服务商;没连过为 null。 */
+    @Synchronized
+    fun mikaProvider(): Provider? = _providers.value.firstOrNull { it.signIn == MIKA_SIGN_IN }
+
+    /**
+     * 清掉 mika 自有账号服务商的 Key(退出时调用):
+     * 商汤预设可能从来没被连进任何服务商(没填过 key),[removeProvider] 不会碰到它,
+     * 单独清一次,退出后这台手机上不留商汤 key 残留。[providerId] 传 null 时找 [mikaProvider]。
+     */
+    @Synchronized
+    fun clearMikaSensenovaKey(providerId: String? = null) {
+        val p = if (providerId != null) provider(providerId) else mikaProvider()
+        if (p != null && p.signIn == MIKA_SIGN_IN) setKey(p.id, "")
+    }
 
     /** 用 OpenRouter 账号授权连上的那一家;没有为 null。 */
     fun openRouterAccount(): Provider? = _providers.value.firstOrNull { it.signIn == OPENROUTER_SIGN_IN }

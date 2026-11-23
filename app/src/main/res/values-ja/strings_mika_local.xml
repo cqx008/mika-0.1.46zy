@@ -1,0 +1,18 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- 自有特性日本語資源 -->
+<resources>
+<string name="about_wechat_sub">WeChat: 右の ID を長押しでコピー</string>
+<string name="settings_account">アカウント</string>
+<string name="settings_account_sub">mika アカウント、ニックネーム、アバターとログアウト</string>
+<string name="settings_account_not_logged_in">未ログイン</string>
+<string name="settings_account_signed_in">ログイン済み</string>
+<string name="settings_account_sign_in">ログイン / 登録</string>
+<string name="settings_account_profile">プロフィール</string>
+<string name="settings_account_profile_none">未設定</string>
+<string name="settings_account_avatar_selected">アバター：%1$s</string>
+<string name="settings_account_sign_out_note">mika アカウントをログアウトし、この端末の商湯プリセットを削除します</string>
+<string name="settings_account_sign_out_title">ログアウトしますか？</string>
+<string name="settings_account_sign_out_body">この端末の mika アカウントと商湯プリセットを削除します。いつでも再登録・再ログインできます。</string>
+<string name="settings_feedback">フィードバックと提案</string>
+<string name="settings_feedback_sub">アイデア・提案・不具合の報告</string>
+</resources>

@@ -1,8 +1,36 @@
 package com.wangzan101.mika.ui
 
 import com.wangzan101.mika.R
+import com.wangzan101.mika.account.MikaAccount
 import com.wangzan101.mika.i18n.tr
 import com.wangzan101.mika.i18n.trPlural
+import com.wangzan101.mika.ui.MikaAccountPanelActions
+import com.wangzan101.mika.ui.MikaAccountPanelSheet
+import com.wangzan101.mika.ui.MIKA_AVATAR_PRESETS
+import com.wangzan101.mika.ui.openSensenovaRegister
+import com.wangzan101.mika.ui.components.ValueTone
+import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.background
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.text.BasicTextField
+import androidx.compose.foundation.clickable
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.size
+import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.Alignment
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.SolidColor
+import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.foundation.text.KeyboardOptions
+import androidx.compose.ui.text.input.KeyboardType
+import androidx.compose.ui.text.input.PasswordVisualTransformation
+import androidx.compose.ui.text.input.VisualTransformation
+import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import androidx.compose.ui.res.pluralStringResource
 import androidx.compose.ui.res.stringResource
 import com.wangzan101.mika.settings.ProviderConnection
@@ -66,6 +94,7 @@ import com.wangzan101.mika.ui.components.StatusPill
 import com.wangzan101.mika.ui.components.TileTone
 import com.wangzan101.mika.ui.theme.MikaIcons
 import com.wangzan101.mika.ui.theme.MikaTheme
+import com.wangzan101.mika.ui.theme.MikaType
 import com.wangzan101.mika.i18n.AppLanguage
 import com.wangzan101.mika.wechat.WechatConnectionState
 import kotlinx.coroutines.Dispatchers
@@ -75,7 +104,7 @@ import kotlinx.coroutines.withContext
 private const val SHIZUKU_SETUP_GUIDE_URL = "https://shizuku.rikka.app/guide/setup/"
 
 /** 设置里能进入的子页面;[Home] 是设置首页,[Advanced] 集中放置连接、维护和工程能力。 */
-private enum class SettingsPage { Home, Advanced, AppAccess, SmsLogin, PhoneOps, Calls, Wechat, DuringWork, AppPace, Capsule, Language, Notifications, Recommendations, Checklists, Workflows, Sandbox, Plugins, EnvVars, Recovery, SelfCheck, ComputerAccess, McpServers, Root, Developer, DeviceDirectories, RunStats, Proactive, Backup }
+private enum class SettingsPage { Home, Advanced, AppAccess, SmsLogin, PhoneOps, Calls, Wechat, DuringWork, AppPace, Capsule, Language, Notifications, Recommendations, Checklists, Workflows, Sandbox, Plugins, EnvVars, Recovery, SelfCheck, ComputerAccess, McpServers, Root, Developer, DeviceDirectories, RunStats, Proactive, Backup, MikaAccount }
 
 /**
  * 设置页:总状态卡 + 常用 / 我的数据 / 其他。高级与其他只增加一层,各子页返回来时的页面。
@@ -105,6 +134,8 @@ fun SettingsScreen(
     onOpenVoiceCatalog: () -> Unit = {},
     /** 外部 MCP server 设置(outbound);为空时不显示入口。 */
     mcpServers: com.wangzan101.mika.settings.McpServerStore? = null,
+    /** 自有实现:报错工单/反馈:直达自家后台反馈面板(发工单:机型 + 任务日志 + 诊断, 后台「报错工单」管理)。 */
+    onOpenFeedback: () -> Unit = {},
     /** 人格设置;为空时不显示入口。 */
     onOpenPersonas: (() -> Unit)? = null,
     openPhoneOps: Boolean = false,
@@ -175,6 +206,9 @@ fun SettingsScreen(
     var speed by remember { mutableStateOf(flags.speedFlags()) }
     val scope = rememberCoroutineScope()
     val sandboxStatus by remember { SandboxState.get(context) }.status.collectAsState()
+    // 自有实现:mika 自有账号(商汤预设服务商)的会话;不依赖商汤预设服务商存在
+    val mikaAccountVm = remember(scope) { ModelSetupViewModel(store, scope, mikaContextArg = context.applicationContext) }
+    var mikaAccountSession by remember { mutableStateOf(mikaAccountVm.mikaSession()) }
     // 网络代理:只在这里改;读设置要解密、看浏览器支不支持要加载 WebView,都放到后台
     val proxies = remember { NetProxyStore.get(context) }
     var proxy by remember { mutableStateOf<String?>(null) }
@@ -250,10 +284,13 @@ fun SettingsScreen(
             onOpenRecommendations = { page = SettingsPage.Recommendations },
             onOpenPersonas = onOpenPersonas,
             onOpenAdvanced = { page = SettingsPage.Advanced },
+            onOpenFeedback = onOpenFeedback,
             onOpenBrowser = onOpenBrowser,
             onOpenFiles = onOpenFiles,
             onOpenPersonal = onOpenPersonal,
             onOpenPlans = onOpenPlans,
+            mikaAccount = mikaAccountSession,
+            onOpenMikaAccount = { page = SettingsPage.MikaAccount },
             versionName = BuildConfig.VERSION_NAME, updateVersion = updateVersion, onOpenAbout = onOpenAbout,
         )
         SettingsPage.Advanced -> AdvancedSettingsContent(
@@ -348,6 +385,65 @@ fun SettingsScreen(
         SettingsPage.RunStats -> RunStatsScreen(remember { RunStore(context).metrics }, onBack = back)
         SettingsPage.Proactive -> com.wangzan101.mika.proactive.ProactiveScreen(onBack = back)
         SettingsPage.Backup -> BackupScreen(onBack = toHome)
+        SettingsPage.MikaAccount -> {
+            // 退出/改资料/填 key 后重新读会话,让账号页立即反映最新状态
+            fun refreshSession() { mikaAccountSession = mikaAccountVm.mikaSession() }
+            fun saveSensenovaKey(k: String): Boolean {
+                val ok = mikaAccountVm.mikaSetSensenovaKey(k)
+                refreshSession()
+                return ok
+            }
+            var editingSensenovaKey by remember { mutableStateOf(false) }
+            var showMikaLoginPanel by remember { mutableStateOf(false) }
+            val mikaUi by mikaAccountVm.state.collectAsState()
+            val mikaPanelActions = remember(mikaAccountVm) { MikaAccountPanelActions(
+                login = { email, pwd -> mikaAccountVm.mikaLogin(email, pwd) },
+                register = { email, pwd, nick, avatar -> mikaAccountVm.mikaRegister(email, pwd, nick, avatar) },
+                dismiss = { showMikaLoginPanel = false },
+                openSensenova = { openSensenovaRegister(context) },
+            ) }
+            MikaAccountSettingsContent(
+                session = mikaAccountSession,
+                hasSensenovaKey = store.mikaProvider()?.id?.let { store.hasKey(it) } ?: false,
+                onBack = toHome,
+                onSaveProfile = { nick, avatar, avatarPreset ->
+                    mikaAccountVm.mikaSaveProfile(nick, avatar, avatarPreset)
+                    refreshSession()
+                },
+                onSensenovaKey = { key -> saveSensenovaKey(key) },
+                onSignOut = {
+                    mikaAccountVm.mikaSignOut()
+                    refreshSession()
+                },
+                onOpenSensenova = { openSensenovaRegister(context) },
+                onEditSensenovaKey = { editingSensenovaKey = true },
+                onSignIn = { showMikaLoginPanel = true },
+            )
+            // 模型页「填写/修改商汤 key」弹框(和设置页账号页同一个 KeyEditDialog,复用 onSensenovaKey 保存路径)
+            if (editingSensenovaKey) {
+                var key by remember { mutableStateOf(mikaAccountSession?.sensenovaKey.orEmpty()) }
+                val keyFilled = mikaAccountSession?.sensenovaKey?.isNotBlank() == true || store.mikaProvider()?.id?.let { store.hasKey(it) } ?: false
+                KeyEditDialog(
+                    title = stringResource(R.string.mika_sensenova_key),
+                    hint = stringResource(R.string.mika_sensenova_key_fill_hint),
+                    value = key, onChange = { key = it },
+                    secret = true,
+                    allowClear = true,
+                    clearText = stringResource(R.string.model_key_clear),
+                    confirmText = stringResource(R.string.save),
+                    enabled = key.isNotBlank() || (key.isEmpty() && keyFilled),
+                    onConfirm = {
+                        if (saveSensenovaKey(key.trim())) editingSensenovaKey = false
+                    },
+                    onDismiss = { editingSensenovaKey = false },
+                )
+            }
+            // 未登录时点「登录/注册」弹的登录面板(复用模型页/欢迎页同一个 MikaAccountPanelSheet)
+            if (showMikaLoginPanel && mikaAccountSession == null) {
+                MikaAccountPanelSheet(mikaUi, initialTab = false, mikaPanelActions, onOpenSensenova = { openSensenovaRegister(context) })
+                LaunchedEffect(Unit) { mikaAccountVm.state.collect { if (it.mikaSession != null || it.accountSignIn.running) showMikaLoginPanel = false; refreshSession() } }
+            }
+        }
     }
 
     if (editingProxy) NetProxyDialog(
@@ -459,9 +555,15 @@ fun SettingsContent(
     onOpenLanguage: () -> Unit = {},
     onOpenMemory: (() -> Unit)? = null,
     onOpenBackup: (() -> Unit)? = null,
+    /** 自有实现:mika 自有账号的会话;null=未登录(入口仍显示,点进去能登录/管理/退出,不依赖商汤预设服务商存不存在)。 */
+    mikaAccount: com.wangzan101.mika.account.MikaAccount.Session? = null,
+    /** 「账号」入口:进独立的 mika 账号页(不依赖商汤预设服务商存不存在)。 */
+    onOpenMikaAccount: () -> Unit = {},
     onOpenRecommendations: () -> Unit = {},
     onOpenPersonas: (() -> Unit)? = null,
     onOpenAdvanced: () -> Unit = {},
+    /** 自有实现:报错工单/反馈直达自家后台(发工单:机型 + 任务日志 + 诊断)。 */
+    onOpenFeedback: () -> Unit = {},
     onOpenBrowser: () -> Unit = {},
     onOpenFiles: () -> Unit = {},
     onOpenPersonal: () -> Unit = {},
@@ -483,6 +585,27 @@ fun SettingsContent(
         GroupCard {
             ListRow(MikaIcons.Spark, stringResource(R.string.settings_model), first = true, onClick = onOpenModels) {
                 RowValue(mainModel ?: stringResource(R.string.settings_not_set))
+                RowChevron()
+            }
+        }
+
+        // 「账号」入口:mika 自有账号(昵称/头像/已登录);没登录也显示(未登录),点进去能登录/管理/退出,
+        // 不依赖商汤预设服务商存不存在
+        GroupLabel(stringResource(R.string.settings_account))
+        GroupCard {
+            val mikaSignedIn = mikaAccount != null
+            val mikaName = mikaAccount?.nick?.takeIf { it.isNotBlank() } ?: mikaAccount?.email.orEmpty()
+            ListRow(
+                MikaIcons.Key,
+                stringResource(R.string.settings_account),
+                stringResource(R.string.settings_account_sub),
+                first = true,
+                onClick = onOpenMikaAccount,
+            ) {
+                RowValue(
+                    if (mikaName.isNotEmpty()) mikaName else stringResource(R.string.settings_account_not_logged_in),
+                    if (mikaSignedIn) ValueTone.Ok else ValueTone.Plain,
+                )
                 RowChevron()
             }
         }
@@ -572,9 +695,13 @@ fun SettingsContent(
         GroupCard {
             ListRow(MikaIcons.Wrench, stringResource(R.string.settings_advanced), first = true, onClick = onOpenAdvanced) { RowChevron() }
         }
+        // 自有实现:报错工单/反馈走自家后台(机型 + 任务日志 + 诊断 → MIKA_BACKEND_BASE /api/feedback),不是 GitHub
+        GroupCard {
+            ListRow(MikaIcons.Bug, stringResource(R.string.settings_feedback), stringResource(R.string.settings_feedback_sub), first = true, onClick = onOpenFeedback) { RowChevron() }
+        }
         GroupCard {
             ListRow(MikaIcons.Info, stringResource(R.string.settings_about), first = true, onClick = onOpenAbout) {
-                TrailingValue(AboutCopy.settingsValue(updateVersion, versionName))
+                AboutTrailingValue(AboutCopy.settingsValue(updateVersion, versionName))
                 RowChevron()
             }
         }
@@ -689,6 +816,25 @@ fun AdvancedSettingsContent(
     }
 }
 
+/** 设置首页「关于 Mika」一行尾部:有新版写「x 可更新」带红点,不然写当前版本号。 */
+@Composable
+private fun AboutTrailingValue(v: AboutCopy.CheckValue) {
+    if (v.text == null && !v.spinner) return
+    val c = MikaTheme.colors
+    Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End, verticalAlignment = Alignment.CenterVertically) {
+        if (v.spinner) {
+            androidx.compose.material3.CircularProgressIndicator(
+                Modifier.size(16.dp), color = c.accent, strokeWidth = 2.dp)
+        } else {
+            val t = v.text.orEmpty()
+            Text(t, style = MikaType.Hint, color = if (v.highlight) c.ok else c.ink3)
+            if (v.dot) {
+                Box(Modifier.size(6.dp).padding(start = 4.dp).background(Color(0xFFE5484D), RoundedCornerShape(3.dp)))
+            }
+        }
+    }
+}
+
 /** 「手机操作」一行尾部的状态胶囊:无障碍和内置助手都就绪才是「可用」。 */
 @Composable
 private fun PhoneOpsPill(status: SystemStatus) {
@@ -723,6 +869,277 @@ private fun StatusSummary(check: Prerequisites.Check, onProblem: (Problem) -> Un
             Modifier.testTag("settings-status"),
         ) {
             MikaButton(copy.link, { onProblem(problem) }, kind = ButtonKind.Tonal, size = ButtonSize.Small)
+        }
+    }
+}
+
+/**
+ * 单行/多行输入弹框:本地账号页、商汤 key、昵称/头像编辑共用。
+ */
+@Composable
+fun KeyEditDialog(
+    title: String,
+    hint: String,
+    value: String,
+    onChange: (String) -> Unit,
+    body: (@Composable () -> Unit)? = null,
+    secret: Boolean = false,
+    allowClear: Boolean = false,
+    clearText: String = "",
+    confirmText: String,
+    enabled: Boolean = true,
+    onConfirm: () -> Unit,
+    onDismiss: () -> Unit,
+) {
+    val c = MikaTheme.colors
+    val keyboardOptions = KeyboardOptions(keyboardType = if (secret) KeyboardType.Password else KeyboardType.Text)
+    val visualTransformation = if (secret) PasswordVisualTransformation() else VisualTransformation.None
+    MikaDialog(
+        onDismissRequest = onDismiss,
+        title = { Text(title) },
+        text = {
+            Column(Modifier.fillMaxWidth()) {
+                Text(hint, style = MikaType.Caption, color = c.ink3)
+                BasicTextField(
+                    value, onChange,
+                    Modifier.fillMaxWidth().padding(top = 8.dp).testTag("settings-account-edit"),
+                    singleLine = true,
+                    textStyle = MikaType.Body.copy(color = c.ink),
+                    keyboardOptions = keyboardOptions,
+                    cursorBrush = SolidColor(c.accent),
+                    visualTransformation = visualTransformation,
+                )
+                body?.invoke()
+            }
+        },
+        confirmButton = {
+            TextButton(onClick = onConfirm, enabled = enabled) { Text(confirmText) }
+        },
+        dismissButton = {
+            if (allowClear) {
+                TextButton({ onChange(""); onConfirm() }) { Text(clearText.ifEmpty { stringResource(R.string.cancel) }, color = c.ink2) }
+            } else {
+                TextButton(onDismiss) { Text(stringResource(R.string.cancel)) }
+            }
+        },
+    )
+}
+
+/**
+ * mika 账号(注册/带昵称头像那个)的独立管理页:
+ * 显示昵称/邮箱/头像/登录状态,改昵称和头像,商汤 key 的状态,以及「退出登录」。
+ */
+@Composable
+fun MikaAccountSettingsContent(
+    session: com.wangzan101.mika.account.MikaAccount.Session?,
+    hasSensenovaKey: Boolean,
+    onBack: () -> Unit,
+    onSaveProfile: (String, String, String) -> Unit = { _, _, _ -> },
+    onSensenovaKey: (String) -> Boolean = { true },
+    onSignOut: () -> Unit = {},
+    onOpenSensenova: () -> Unit = {},
+    onEditSensenovaKey: () -> Unit = {},
+    onSignIn: () -> Unit = {},
+) {
+    val c = MikaTheme.colors
+    val signedIn = session != null
+    var editingNick by remember { mutableStateOf(false) }
+    var editingAvatar by remember { mutableStateOf(false) }
+    var editingKey by remember { mutableStateOf(false) }
+    var confirmingSignOut by remember { mutableStateOf(false) }
+    val keyFilled = hasSensenovaKey || session?.sensenovaKey?.isNotBlank() == true
+
+    PageScaffold(stringResource(R.string.settings_account), onBack) {
+        GroupLabel(stringResource(R.string.mika_account_title))
+        GroupCard {
+            Row(
+                Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 12.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                val preset = MIKA_AVATAR_PRESETS.firstOrNull {
+                    it.id == session?.avatarPreset || (it.id == session?.avatar && session?.avatarPreset.isNullOrEmpty())
+                }
+                Box(
+                    Modifier.size(44.dp).clip(RoundedCornerShape(22.dp))
+                        .background(preset?.color ?: c.neutralSoft).testTag("settings-account-avatar"),
+                    contentAlignment = Alignment.Center,
+                ) {
+                    Text(
+                        preset?.glyph ?: "M",
+                        fontSize = 18.sp, fontWeight = FontWeight.SemiBold,
+                        color = if (preset != null) Color.White else c.ink2,
+                    )
+                }
+                Column(Modifier.weight(1f).padding(start = 14.dp)) {
+                    Text(
+                        session?.nick?.takeIf { it.isNotBlank() } ?: session?.email.orEmpty(),
+                        fontSize = 16.sp, fontWeight = FontWeight.SemiBold,
+                        color = if (signedIn) c.ink else c.ink3,
+                        maxLines = 1, overflow = TextOverflow.Ellipsis,
+                    )
+                    Text(
+                        if (signedIn) stringResource(R.string.settings_account_signed_in) else stringResource(R.string.settings_account_not_logged_in),
+                        Modifier.padding(top = 2.dp), style = MikaType.Caption,
+                        color = if (signedIn) c.ok else c.ink3,
+                    )
+                }
+                if (!signedIn) {
+                    Text(
+                        stringResource(R.string.settings_account_sign_in),
+                        Modifier.padding(start = 8.dp, bottom = 2.dp).clickable { onSignIn() },
+                        color = c.accent, style = MikaType.Body,
+                    )
+                }
+            }
+            session?.email?.takeIf { it.isNotEmpty() }?.let { email ->
+                ListRow(null, stringResource(R.string.mika_account_email), first = true) {
+                    RowValue(email)
+                }
+            }
+        }
+
+        if (signedIn) {
+            GroupLabel(stringResource(R.string.settings_account_profile))
+            GroupCard {
+                ListRow(MikaIcons.Edit, stringResource(R.string.mika_account_nick), first = true, onClick = { editingNick = true }) {
+                    RowValue(session?.nick?.takeIf { it.isNotBlank() } ?: stringResource(R.string.settings_account_profile_none))
+                    RowChevron()
+                }
+                ListRow(MikaIcons.Edit, stringResource(R.string.mika_account_avatar), onClick = { editingAvatar = true }) {
+                    val shown = MIKA_AVATAR_PRESETS.firstOrNull {
+                        it.id == session?.avatarPreset || (it.id == session?.avatar && session?.avatarPreset.isNullOrEmpty())
+                    }
+                    RowValue(shown?.let { stringResource(R.string.settings_account_avatar_selected, it.glyph) } ?: stringResource(R.string.settings_account_profile_none))
+                    RowChevron()
+                }
+            }
+
+            GroupLabel(stringResource(R.string.mika_sensenova_key))
+            GroupCard {
+                if (keyFilled) {
+                    ListRow(null, stringResource(R.string.mika_sensenova_key), first = true, onClick = onEditSensenovaKey) {
+                        RowValue(stringResource(R.string.models_key_saved))
+                        RowChevron()
+                    }
+                } else {
+                    ListRow(null, stringResource(R.string.mika_sensenova_key), stringResource(R.string.mika_sensenova_key_fill_hint), first = true, onClick = onEditSensenovaKey) {
+                        RowValue(stringResource(R.string.mika_sensenova_key_open), ValueTone.Link)
+                        RowChevron()
+                    }
+                }
+            }
+
+            GroupCard(Modifier.padding(top = 8.dp)) {
+                ListRow(
+                    null, stringResource(R.string.chatgpt_sign_out), stringResource(R.string.settings_account_sign_out_note),
+                    titleColor = c.bad, first = true, onClick = { confirmingSignOut = true },
+                ) { RowChevron() }
+            }
+        }
+    }
+
+    // 改昵称
+    if (editingNick) {
+        var nick by remember { mutableStateOf(session?.nick.orEmpty()) }
+        KeyEditDialog(
+            title = stringResource(R.string.mika_account_nick),
+            hint = stringResource(R.string.mika_account_nick_ph),
+            value = nick, onChange = { nick = it },
+            allowClear = true,
+            confirmText = stringResource(R.string.save),
+            onConfirm = {
+                editingNick = false
+                onSaveProfile(nick.take(32), session?.avatar ?: "", session?.avatarPreset ?: "")
+            },
+            onDismiss = { editingNick = false },
+        )
+    }
+
+    // 改头像
+    var pickedAvatar by remember { mutableStateOf(
+        session?.avatarPreset?.takeIf { it.isNotBlank() } ?: session?.avatar?.takeIf { it.matches(Regex("a[1-8]")) } ?: ""
+    ) }
+    if (editingAvatar) {
+        KeyEditDialog(
+            title = stringResource(R.string.mika_account_avatar),
+            hint = stringResource(R.string.mika_account_avatar_hint),
+            value = "", onChange = {},
+            body = {
+                Row(Modifier.fillMaxWidth().padding(top = 10.dp), horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                    MIKA_AVATAR_PRESETS.forEach { p ->
+                        val on = pickedAvatar == p.id
+                        Box(
+                            Modifier
+                                .size(40.dp)
+                                .clip(RoundedCornerShape(20.dp))
+                                .background(if (on) p.color else c.fill)
+                                .clickable(onClick = { pickedAvatar = if (on) "" else p.id })
+                                .testTag("settings-account-avatar-${p.id}"),
+                            contentAlignment = Alignment.Center,
+                        ) {
+                            Text(
+                                p.glyph,
+                                fontSize = if (p.glyph.length > 1) 11.sp else 16.sp,
+                                color = if (on) Color.White else c.ink2,
+                                fontWeight = FontWeight.SemiBold,
+                            )
+                        }
+                    }
+                }
+            },
+            confirmText = stringResource(R.string.save),
+            onConfirm = {
+                editingAvatar = false
+                onSaveProfile(
+                    session?.nick.orEmpty(),
+                    if (pickedAvatar.isEmpty()) "" else pickedAvatar,
+                    if (pickedAvatar.isEmpty()) "" else pickedAvatar,
+                )
+            },
+            onDismiss = { editingAvatar = false },
+        )
+    }
+
+    // 填/清商汤 key
+    if (editingKey) {
+        var key by remember { mutableStateOf("") }
+        KeyEditDialog(
+            title = stringResource(R.string.mika_sensenova_key),
+            hint = if (keyFilled) stringResource(R.string.models_new_key_hint) else stringResource(R.string.mika_sensenova_key_fill_hint),
+            value = key, onChange = { key = it },
+            secret = true,
+            allowClear = true,
+            clearText = stringResource(R.string.model_key_clear),
+            confirmText = stringResource(R.string.save),
+            enabled = key.isNotBlank() || (key.isEmpty() && keyFilled),
+            onConfirm = {
+                val saved = onSensenovaKey(key.trim())
+                if (saved) editingKey = false
+            },
+            onDismiss = { editingKey = false },
+        )
+    }
+
+    // 退出前确认
+    if (confirmingSignOut) {
+        AlertDialog(
+            onDismissRequest = { confirmingSignOut = false },
+            title = { Text(stringResource(R.string.settings_account_sign_out_title)) },
+            text = { Text(stringResource(R.string.settings_account_sign_out_body)) },
+            confirmButton = {
+                TextButton({ confirmingSignOut = false; onSignOut() }) {
+                    Text(stringResource(R.string.chatgpt_sign_out), color = c.bad)
+                }
+            },
+            dismissButton = { TextButton({ confirmingSignOut = false }) { Text(stringResource(R.string.cancel)) } },
+        )
+    }
+
+    if (!signedIn) {
+        GroupCard(Modifier.padding(top = 8.dp)) {
+            ListRow(null, stringResource(R.string.mika_guide_button), stringResource(R.string.mika_guide_note), first = true, onClick = onOpenSensenova) {
+                RowChevron()
+            }
         }
     }
 }

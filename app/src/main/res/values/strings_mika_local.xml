@@ -64,4 +64,5 @@
 <string name="feedback_official_sub">Device info + this task\u0027s log, filed as an issue on our repo so we can look at the failure</string>
 <string name="settings_feedback">Feedback &amp; suggestions</string>
 <string name="settings_feedback_sub">Share ideas, suggestions or report a problem</string>
+<string name="about_wechat_sub">WeChat: long press the ID on the right to copy</string>
 </resources>

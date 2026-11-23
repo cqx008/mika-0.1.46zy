@@ -438,6 +438,8 @@ private fun MikaRoot(
     }
     var runId by rememberSaveable { mutableStateOf<String?>(null) }
     var reportRunId by rememberSaveable { mutableStateOf<String?>(null) }
+    // 自有实现:工单/建议发可配置后端（MIKA_BACKEND_BASE），不连 GitHub
+    var officialFeedbackRunId by rememberSaveable { mutableStateOf<String?>(null) }
     var playbackScreenshotId by rememberSaveable { mutableStateOf<Int?>(null) }
     var sourceRunId by rememberSaveable { mutableStateOf<String?>(null) }
     var sourceLegacyText by rememberSaveable { mutableStateOf<String?>(null) }
@@ -685,7 +687,12 @@ private fun MikaRoot(
                 updateVersion = updateState.update?.version, onOpenAbout = { nav.push(Route.About) },
                 onOpenVoiceCatalog = { nav.push(Route.VoiceServices) },
                 mcpServers = app.mcpServers,
-                openPhoneOps = openPhoneOps, onPhoneOpsOpened = { openPhoneOps = false })
+                openPhoneOps = openPhoneOps, onPhoneOpsOpened = { openPhoneOps = false },
+                // 自有实现:工单发可配置后端(mika-api)，不连 GitHub
+                onOpenFeedback = {
+                    officialFeedbackRunId = RunStore(context).list().firstOrNull()?.id
+                    nav.push(Route.OfficialFeedback)
+                })
         }
         Route.Models -> ModelsScreen(store, onBack = back, onOpenSpeech = { nav.push(Route.SpeechModel) }, onOpenVoice = { nav.push(Route.VoiceModel) }, onOpenImage = { nav.push(Route.ImageModel) }, onOpenUsage = { nav.push(Route.Usage) }, onOpenVoiceCatalog = { nav.push(Route.VoiceServices) }, onOpenCallMode = { nav.push(Route.CallMode) })
         Route.VoiceModel -> VoiceModelScreen(store, onBack = back, onOpenServices = { nav.push(Route.VoiceServices) })
@@ -800,9 +807,17 @@ private fun MikaRoot(
             if (vm == null) LaunchedEffect(Unit) { nav.back() }
             else if (route == Route.Report) TaskReportScreen(vm, back,
                 onReplay = { playbackScreenshotId = it; nav.push(Route.Playback) },
-                onTimeline = { runId = id; nav.push(Route.Run) })
+                onTimeline = { runId = id; nav.push(Route.Run) },
+                onFeedback = { officialFeedbackRunId = id; nav.push(Route.OfficialFeedback) })
             else TaskPlaybackScreen(vm, playbackScreenshotId, back)
         }
+        // 自有实现:发工单/建议到可配置后端(mika-api,不连 GitHub)
+        Route.OfficialFeedback -> {
+            val id = officialFeedbackRunId
+            if (id == null) LaunchedEffect(Unit) { nav.back() }
+            else OfficialFeedbackScreen(id, status, back)
+        }
+        Route.FeedbackSuggestion -> FeedbackSuggestionScreen(back)
         Route.Source -> {
             val vm = remember(sourceRunId, sourceLegacyText) {
                 SourceViewModel(RunStore(context), sourceRunId, sourceLegacyText) { ConfirmationNotifier.appLabel(context, it) }

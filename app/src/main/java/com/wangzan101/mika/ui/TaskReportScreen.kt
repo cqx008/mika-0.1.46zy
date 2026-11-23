@@ -14,6 +14,8 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.platform.testTag
+import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Column
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -61,7 +63,9 @@ internal fun rememberReport(vm: TaskReportViewModel): Pair<Boolean, TaskReport?>
 }
 
 @Composable
-fun TaskReportScreen(vm: TaskReportViewModel, onBack: () -> Unit, onReplay: (Int?) -> Unit, onTimeline: () -> Unit) {
+fun TaskReportScreen(vm: TaskReportViewModel, onBack: () -> Unit, onReplay: (Int?) -> Unit, onTimeline: () -> Unit,
+    /** 自有实现:报错工单(发自家后台, 带任务日志) */
+    onFeedback: (() -> Unit)? = null) {
     BackHandler(onBack = onBack)
     val (loaded, report) = rememberReport(vm)
     val c = MikaTheme.colors
@@ -106,6 +110,14 @@ fun TaskReportScreen(vm: TaskReportViewModel, onBack: () -> Unit, onReplay: (Int
                 }
                 item("replay") { MikaButton(stringResource(R.string.playback_title), { onReplay(null) }, Modifier.fillMaxWidth(), kind = ButtonKind.Primary) }
                 item("timeline") { MikaButton(stringResource(R.string.chat_view_process), onTimeline, Modifier.fillMaxWidth(), kind = ButtonKind.Tonal, size = ButtonSize.Small) }
+                onFeedback?.let { cb ->
+                    item("feedback") {
+                        Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                            MikaButton(stringResource(R.string.feedback_official), cb, Modifier.fillMaxWidth(), kind = ButtonKind.Tonal, size = ButtonSize.Small)
+                            Text(stringResource(R.string.feedback_official_sub), style = MikaType.Hint, color = c.ink3, textAlign = androidx.compose.ui.text.style.TextAlign.Center)
+                        }
+                    }
+                }
                 item("privacy") { Text(stringResource(R.string.report_local_note), style = MikaType.Hint, color = c.ink2) }
             }
         }

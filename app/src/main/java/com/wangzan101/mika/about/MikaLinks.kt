@@ -13,6 +13,9 @@ object MikaLinks {
     const val NEW_ISSUE = "$REPO/issues/new"
     const val X = "https://x.com/wangzan101"
     const val X_HANDLE = "@wangzan101"
+    /** 关于页「仓库/项目」指自有仓库(0.1.51zy 本地版);GitHub 兜底工单仍走 [REPO]。 */
+    const val FORK_REPO = "https://github.com/cqx008/mika-0.1.51zy"
+    const val FORK_REPO_LABEL = "github.com/cqx008/mika-0.1.51zy"
     /** 检查更新只问 GitHub 发布页(不登录,每小时有次数限制)。已改用 ServerUpdateChecker.ENDPOINT,保留不动。 */
     const val LATEST_RELEASE_API = "https://api.github.com/repos/wangzan101/Mika/releases/latest"
 

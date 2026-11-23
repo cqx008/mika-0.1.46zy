@@ -63,4 +63,5 @@
 <string name="settings_feedback_sub">提建议、报错或复制诊断信息</string>
   <string name="dev_scene_prompts">场景提示词(购物 / 支付)</string>
   <string name="dev_scene_prompts_sub">默认关。打开后给下单/结算类任务加简短规则,让模型处理得更准;付款确认不会被它放松。</string>
+<string name="about_wechat_sub">微信：长按右边 ID 复制</string>
 </resources>

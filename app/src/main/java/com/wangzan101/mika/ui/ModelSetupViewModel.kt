@@ -2,6 +2,7 @@ package com.wangzan101.mika.ui
 
 import com.wangzan101.mika.R
 import com.wangzan101.mika.i18n.tr
+import com.wangzan101.mika.account.MikaAccount
 import com.wangzan101.mika.core.model.ApiKeyText
 import com.wangzan101.mika.core.model.KeyPoolManager
 import com.wangzan101.mika.core.model.ListFailure
@@ -276,6 +277,10 @@ data class ModelSetupUi(
     val sttCatalog: VoiceCatalogSnapshot? = null,
     /** 正在拿一小段录音试转的服务商 id;没有时为 null。 */
     val speechTesting: String? = null,
+    /** 自有账号(mika 商汤预设服务商)的会话;没登录过为 null。 */
+    val mikaSession: MikaAccount.Session? = null,
+    /** 刚注册成功(mika 账号),引导填商汤 key。 */
+    val mikaJustRegistered: Boolean = false,
 ) {
     /** 还没有服务商时表单总是展开。 */
     val showForm: Boolean get() = formOpen || providers.isEmpty()
@@ -360,6 +365,8 @@ class ModelSetupViewModel(
     private val stt: SttSelectionController? = null,
     /** 统一语音目录的账号管理:删除服务商时一并清掉依赖它的语音模型;测试和上手流程可不传。 */
     private val voiceAccounts: com.wangzan101.mika.voice.model.VoiceAccountManager? = null,
+    /** 自有账号(商汤预设服务商)的会话 context;不传则自有账号功能不激活(测试里不传)。 */
+    private val mikaContextArg: android.content.Context? = null,
 ) {
     private val _state = MutableStateFlow(snapshot(ModelSetupUi(AddForm.of(ProviderPresets.all.first()))))
     val state: StateFlow<ModelSetupUi> = _state.asStateFlow()
@@ -1306,6 +1313,146 @@ class ModelSetupViewModel(
                 voiceAccounts?.deleteProviderWithVoiceUsage(providerId)
             }
             _state.update { snapshot(it.copy(listing = it.listing - providerId)) }
+        }
+    }
+
+    // ---------- 自有账号(mika 商汤预设服务商),勿删 ----------
+    /** 自有账号会话 context;不传则自有账号功能不激活(测试里不传)。 */
+    private val mikaContext: android.content.Context? = mikaContextArg
+
+    fun mikaSession(): MikaAccount.Session? = mikaContext?.let { MikaAccount.load(it) }
+    val mikaSignedIn: Boolean get() = mikaSession() != null
+
+    fun mikaRegister(email: String, password: String, nick: String = "", avatar: String = "") {
+        val context = mikaContext ?: return
+        if (_state.value.accountSignIn.running) return
+        _state.update { it.copy(accountSignIn = AccountSignInUi(provider = null, running = true)) }
+        scope.launch {
+            val result = withContext(io) { MikaAccount.register(context, email, password, nick, avatar) }
+            when (result) {
+                is MikaAccount.Result.Ok -> {
+                    _state.update { it.copy(mikaJustRegistered = true, accountSignIn = AccountSignInUi()) }
+                    connectMikaProvider(result.session)
+                }
+                is MikaAccount.Result.Error -> _state.update { it.copy(accountSignIn = AccountSignInUi(failure = result.message)) }
+                is MikaAccount.Result.Canceled -> _state.update { it.copy(accountSignIn = AccountSignInUi()) }
+            }
+        }
+    }
+
+    fun mikaLogin(email: String, password: String) {
+        val context = mikaContext ?: return
+        if (_state.value.accountSignIn.running) return
+        _state.update { it.copy(accountSignIn = AccountSignInUi(provider = null, running = true)) }
+        scope.launch {
+            val result = withContext(io) { MikaAccount.login(context, email, password) }
+            when (result) {
+                is MikaAccount.Result.Ok -> connectMikaProvider(result.session)
+                is MikaAccount.Result.Error -> _state.update { it.copy(accountSignIn = AccountSignInUi(failure = result.message)) }
+                is MikaAccount.Result.Canceled -> _state.update { it.copy(accountSignIn = AccountSignInUi()) }
+            }
+        }
+    }
+
+    fun mikaRefresh() {
+        val context = mikaContext ?: return
+        val s = mikaSession() ?: return
+        scope.launch {
+            val refreshed = withContext(io) { runCatching { MikaAccount.refresh(context, s) }.getOrNull() }
+            if (refreshed != null) { _state.update { it.copy(mikaSession = refreshed) }; sync() }
+        }
+    }
+
+    fun mikaSignOut() {
+        val context = mikaContext ?: return
+        scope.launch {
+            var mikaId: String? = null
+            withContext(io) {
+                mikaId = store.mikaProvider()?.id
+                if (mikaId != null) store.removeProvider(mikaId)
+                store.clearMikaSensenovaKey()
+                MikaAccount.signOut(context)
+            }
+            _state.update { snapshot(it.copy(listing = (it.listing - mikaId).mapKeys { m -> m.key!! })) }
+        }
+    }
+
+    /** 设置页「账号」页:保存昵称/头像(复用 [MikaAccount.saveProfile],本机写回,不调后端)。 */
+    fun mikaSaveProfile(nick: String, avatar: String, avatarPreset: String) {
+        val context = mikaContext ?: return
+        val s = mikaSession() ?: return
+        scope.launch { withContext(io) { runCatching { MikaAccount.saveProfile(context, nick, avatar, avatarPreset, s.sensenovaKey) } } }
+        sync()
+    }
+
+    /**
+     * 填/换商汤 key——写回账号会话;商汤预设服务商存在时同步把 Key 存上。
+     * 不依赖商汤预设服务商存在:会话在、预设被删过(退出过/没建过)时也能存进会话。
+     * 返回 false=会话都不在(未登录)。
+     */
+    fun mikaSetSensenovaKey(key: String): Boolean {
+        val context = mikaContext ?: return false
+        val s = mikaSession() ?: return false
+        val k = key.trim()
+        scope.launch {
+            var providerId: String? = null
+            withContext(io) {
+                runCatching { MikaAccount.saveProfile(context, s.nick, s.avatar, s.avatarPreset, k) }
+                providerId = store.mikaProvider()?.id
+                if (providerId != null) {
+                    if (k.isEmpty()) store.clearMikaSensenovaKey(providerId)
+                    else store.updateProviderKey(providerId, k)
+                }
+            }
+            if (providerId != null) refresh(providerId)
+            sync()
+        }
+        return true
+    }
+
+    /**
+     * 登录/注册成功后:用 App 里存的商汤 key 自动连上商汤免费预设并填三用途;
+     * 没有 key 时只建服务商、提示填 key(填 key 时走预设的 defaultModel 分支,三用途会自动全填)。
+     */
+    private fun connectMikaProvider(session: MikaAccount.Session) {
+        scope.launch {
+            try {
+                val p = withContext(io) {
+                    store.connectMika(
+                        apiKey = session.sensenovaKey.takeIf { it.isNotBlank() },
+                        baseUrl = session.sensenovaApiBase,
+                        model = session.sensenovaModel,
+                        models = emptyList(),
+                    )
+                }
+                // 有 key:三用途全默认填写死的模型(不覆盖用户已有选择);默认不发思考字段(免费档限流)
+                if (session.sensenovaKey.isNotBlank()) {
+                    withContext(io) {
+                        val base = ModelOptions.baseOf(p)
+                        if (store.roles.value.main == null) {
+                            store.use(ModelRole.Main, p.id, session.sensenovaModel, base)
+                        }
+                        if (store.roles.value.vision !is RoleChoice.Model) {
+                            store.ensureConfigId(p.id, session.sensenovaModel, base)
+                                ?.let { store.choose(ModelRole.Vision, RoleChoice.Model(it)) }
+                        }
+                        if (store.roles.value.light !is RoleChoice.Model) {
+                            store.ensureConfigId(p.id, session.sensenovaModel, base)
+                                ?.let { store.choose(ModelRole.Light, RoleChoice.Model(it)) }
+                        }
+                        for (role in ModelRole.entries) store.setReasoningEffortAfterSave(role, "none")
+                    }
+                }
+                mikaContext?.let { ctx ->
+                    runCatching { withContext(io) { MikaAccount.refresh(ctx, session) } }.getOrNull()?.let { s ->
+                        _state.update { it -> it.copy(mikaSession = s) }
+                    }
+                }
+                _state.update { snapshot(it.copy(signedInProvider = p.id, formOpen = false)) }
+                sync()
+            } catch (e: Exception) {
+                _state.update { it.copy(accountSignIn = AccountSignInUi(failure = "自有账号登录失败:${e.message}")) }
+            }
         }
     }
 
